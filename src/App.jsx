@@ -1,1566 +1,854 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  Edit, Plus, Trash2, LogOut, Key, BarChart3, Filter, Copyright, 
-  MessageCircle, Send, ExternalLink, Zap, Settings, Radio, Smartphone, 
-  CheckCircle2, XCircle, RefreshCcw, Trophy, X, Eye, Loader2, UploadCloud, 
-  Image as ImageIcon, List, CheckSquare, Type, School, Users, Wallet, Coins,
-  ChevronLeft, ChevronRight, Search,
-  Bold, Italic, Underline, Strikethrough, AlignLeft, AlignCenter, AlignRight,
-  Subscript, Superscript, Shield, AlertTriangle, Info
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  BookOpen, Clock, Coins, Trophy, ChevronRight, ChevronLeft,
+  LogIn, LogOut, User, Star, RotateCcw, CheckCircle2, XCircle,
+  AlertCircle, Zap, BarChart2, Calendar, Lock, PlayCircle,
+  Copyright, Loader2, Home, BookMarked, Target
 } from 'lucide-react';
 import { db, auth } from './firebase';
-import { 
-  doc, getDoc, setDoc, updateDoc, collection, getDocs, deleteDoc, 
-  onSnapshot, query, orderBy, deleteField, increment, limit, 
-  writeBatch, startAfter, where, getCountFromServer 
+import {
+  doc, getDoc, updateDoc, collection, getDocs, addDoc,
+  query, where, orderBy, limit, increment
 } from 'firebase/firestore';
-import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
+import { signInWithEmailAndPassword, signOut, onAuthStateChanged } from 'firebase/auth';
 import 'katex/dist/katex.min.css';
 import Latex from 'react-latex-next';
-import * as XLSX from 'xlsx';
+
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+const CREDIT_COST = 1;
 
 const SUBTESTS = [
-  { id: 'pu', name: 'Penalaran Umum', questions: 30 },
-  { id: 'ppu', name: 'Pengetahuan & Pemahaman Umum', questions: 20 },
-  { id: 'pbm', name: 'Pemahaman Bacaan & Menulis', questions: 20 },
-  { id: 'pk', name: 'Pengetahuan Kuantitatif', questions: 20 },
-  { id: 'lbi', name: 'Literasi Bahasa Indonesia', questions: 30 },
-  { id: 'lbe', name: 'Literasi Bahasa Inggris', questions: 20 },
-  { id: 'pm', name: 'Penalaran Matematika', questions: 20 },
+  { id: 'pu',  name: 'Penalaran Umum',                  questions: 30, time: 30,  icon: '🧠', group: 'TPS' },
+  { id: 'ppu', name: 'Pengetahuan & Pemahaman Umum',    questions: 20, time: 15,  icon: '📚', group: 'TPS' },
+  { id: 'pbm', name: 'Pemahaman Bacaan & Menulis',      questions: 20, time: 25,  icon: '✍️', group: 'TPS' },
+  { id: 'pk',  name: 'Pengetahuan Kuantitatif',         questions: 20, time: 20,  icon: '🔢', group: 'TPS' },
+  { id: 'lbi', name: 'Literasi Bahasa Indonesia',       questions: 30, time: 45,  icon: '🇮🇩', group: 'Literasi' },
+  { id: 'lbe', name: 'Literasi Bahasa Inggris',         questions: 20, time: 30,  icon: '🌐', group: 'Literasi' },
+  { id: 'pm',  name: 'Penalaran Matematika',            questions: 20, time: 30,  icon: '📐', group: 'Literasi' },
 ];
 
-// --- KONFIGURASI ENV ---
-const STUDENT_APP_URL = "https://utbk-simulation-tester-student.vercel.app"; 
-const FONNTE_TOKEN = import.meta.env.VITE_FONNTE_TOKEN; 
-const SEND_DELAY = 3; 
-
-// ✅ BARU: Konfigurasi Sistem Skoring & Violation Rules
-const VIOLATION_SCORING = {
-  // Tipe pelanggaran & pengurangan poin
-  types: {
-    tab_switch:   { label: 'Pindah Tab/Window',  deduction: 2,  maxCount: 3,  grace: 1 },
-    fullscreen:   { label: 'Keluar Fullscreen',   deduction: 1,  maxCount: 5,  grace: 2 },
-    copy_paste:   { label: 'Copy/Paste',          deduction: 3,  maxCount: 2,  grace: 0 },
-    devtools:     { label: 'Buka DevTools',       deduction: 5,  maxCount: 1,  grace: 0 },
-    idle_timeout: { label: 'Tidak Aktif >5 mnt',  deduction: 0,  maxCount: 10, grace: 3 },
-  },
-  // Total pengurangan maks sebelum auto-submit
-  maxTotalDeduction: 15,
-  // Peringatan diberikan sebelum action diambil
-  warningThreshold: 8,
+const GROUP_COLORS = {
+  TPS:      { bg: 'from-blue-600 to-indigo-700',    badge: 'bg-blue-100 text-blue-700',    ring: 'ring-blue-400' },
+  Literasi: { bg: 'from-orange-500 to-rose-600',    badge: 'bg-orange-100 text-orange-700', ring: 'ring-orange-400' },
 };
 
-// ✅ BARU: Rich Text Formatting Helper
-const applyFormat = (text, selStart, selEnd, format) => {
-  const selected = text.substring(selStart, selEnd);
-  if (!selected) return { text, cursor: selStart };
-  
-  const formatMap = {
-    bold:        { wrap: ['**', '**'] },
-    italic:      { wrap: ['_', '_'] },
-    underline:   { wrap: ['<u>', '</u>'] },
-    strike:      { wrap: ['~~', '~~'] },
-    superscript: { wrap: ['^(', ')'] },
-    subscript:   { wrap: ['_(', ')'] },
-  };
-  
-  const fmt = formatMap[format];
-  if (!fmt) return { text, cursor: selEnd };
-  
-  const [open, close] = fmt.wrap;
-  const newText = text.substring(0, selStart) + open + selected + close + text.substring(selEnd);
-  return { text: newText, cursor: selEnd + open.length + close.length };
+const formatTime = (s) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
+
+// ─── SCORE CALC ───────────────────────────────────────────────────────────────
+const calcPracticeScore = (answers, questions, subtestId) => {
+  let correct = 0, total = questions.length;
+  questions.forEach((q, i) => {
+    const ans = answers[`${subtestId}_${i}`];
+    if (!ans) return;
+    if (q.type === 'pilihan_majemuk') {
+      if (Array.isArray(ans) && Array.isArray(q.correct))
+        if ([...ans].sort().join(',') === [...q.correct].sort().join(',')) correct++;
+    } else if (q.type === 'isian') {
+      if (ans.toString().toLowerCase().trim() === q.correct.toString().toLowerCase().trim()) correct++;
+    } else {
+      if (ans === q.correct) correct++;
+    }
+  });
+  const pct = total > 0 ? Math.round((correct / total) * 100) : 0;
+  const irt = Math.round(200 + (pct / 100) * 800);
+  return { correct, total, pct, irt };
 };
 
-// ✅ BARU: Komponen Rich Text Toolbar
-const RichTextToolbar = ({ textareaRef, value, onChange }) => {
-  const handleFormat = (format) => {
-    const el = textareaRef.current;
-    if (!el) return;
-    const { selectionStart: s, selectionEnd: e } = el;
-    const result = applyFormat(value, s, e, format);
-    onChange(result.text);
-    // Restore cursor after state update
-    requestAnimationFrame(() => {
-      el.focus();
-      el.setSelectionRange(result.cursor - (result.cursor - e), result.cursor);
-    });
-  };
+// ─── SMALL COMPONENTS ─────────────────────────────────────────────────────────
+const Pill = ({ children, className = '' }) => (
+  <span className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold ${className}`}>{children}</span>
+);
 
-  const tools = [
-    { icon: <Bold size={14}/>,        fmt: 'bold',        title: 'Bold (Ctrl+B)' },
-    { icon: <Italic size={14}/>,      fmt: 'italic',      title: 'Italic (Ctrl+I)' },
-    { icon: <Underline size={14}/>,   fmt: 'underline',   title: 'Underline' },
-    { icon: <Strikethrough size={14}/>, fmt: 'strike',    title: 'Strikethrough' },
-    { icon: <Superscript size={14}/>, fmt: 'superscript', title: 'Superscript' },
-    { icon: <Subscript size={14}/>,   fmt: 'subscript',   title: 'Subscript' },
-  ];
-
-  return (
-    <div className="flex items-center gap-1 bg-gray-50 border border-b-0 border-gray-200 rounded-t-lg px-2 py-1.5 flex-wrap">
-      {tools.map(({ icon, fmt, title }) => (
-        <button
-          key={fmt}
-          type="button"
-          title={title}
-          onMouseDown={(e) => { e.preventDefault(); handleFormat(fmt); }}
-          className="p-1.5 rounded hover:bg-indigo-100 hover:text-indigo-700 text-gray-500 transition"
-        >
-          {icon}
-        </button>
-      ))}
-      <div className="w-px h-4 bg-gray-300 mx-1" />
-      <span className="text-[10px] text-gray-400 italic">Pilih teks lalu klik format</span>
-    </div>
-  );
-};
-
-// ✅ BARU: Komponen Violation Rules / Scoring Panel (untuk ditampilkan di admin)
-const ViolationRulesModal = ({ onClose }) => (
-  <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] flex flex-col">
-      <div className="p-6 border-b bg-gradient-to-r from-orange-500 to-red-600 rounded-t-2xl text-white flex justify-between items-center">
-        <h2 className="text-xl font-bold flex items-center gap-2">
-          <Shield size={24}/> Sistem Pengamanan Ujian
-        </h2>
-        <button onClick={onClose} className="hover:bg-white/20 p-2 rounded-full"><X size={20}/></button>
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        {/* Prinsip Win-Win */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
-          <h3 className="font-bold text-blue-800 flex items-center gap-2 mb-2">
-            <Info size={16}/> Prinsip Sistem
-          </h3>
-          <p className="text-sm text-blue-700">
-            Sistem ini menggunakan <b>skoring adaptif</b>, bukan langsung diskualifikasi. 
-            Peserta tetap bisa melanjutkan ujian, namun setiap pelanggaran akan <b>mengurangi skor akhir</b>. 
-            Terdapat toleransi (grace period) untuk pelanggaran tidak disengaja.
-          </p>
-        </div>
-
-        {/* Tabel Pelanggaran */}
-        <div>
-          <h3 className="font-bold text-gray-700 mb-3 flex items-center gap-2">
-            <AlertTriangle size={16} className="text-orange-500"/> Tabel Pengurangan Poin
-          </h3>
-          <div className="overflow-x-auto rounded-xl border border-gray-200">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-100">
-                <tr>
-                  <th className="p-3 text-left font-bold text-gray-600">Tipe Pelanggaran</th>
-                  <th className="p-3 text-center font-bold text-gray-600">Toleransi</th>
-                  <th className="p-3 text-center font-bold text-orange-600">-Poin/Kejadian</th>
-                  <th className="p-3 text-center font-bold text-red-600">Maks Kejadian</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {Object.entries(VIOLATION_SCORING.types).map(([key, v]) => (
-                  <tr key={key} className="hover:bg-gray-50">
-                    <td className="p-3 font-medium text-gray-800">{v.label}</td>
-                    <td className="p-3 text-center">
-                      <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-xs font-bold">
-                        {v.grace}x gratis
-                      </span>
-                    </td>
-                    <td className="p-3 text-center font-bold text-orange-600">
-                      {v.deduction > 0 ? `-${v.deduction} poin` : <span className="text-gray-400 text-xs">Tidak ada</span>}
-                    </td>
-                    <td className="p-3 text-center font-bold text-red-600">{v.maxCount}x</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        {/* Threshold */}
-        <div className="grid grid-cols-2 gap-4">
-          <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-center">
-            <div className="text-2xl font-black text-yellow-600">{VIOLATION_SCORING.warningThreshold}</div>
-            <div className="text-xs font-bold text-yellow-700 uppercase">Poin → Peringatan Keras</div>
-          </div>
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4 text-center">
-            <div className="text-2xl font-black text-red-600">{VIOLATION_SCORING.maxTotalDeduction}</div>
-            <div className="text-xs font-bold text-red-700 uppercase">Poin → Auto Submit</div>
-          </div>
-        </div>
-
-        {/* Contoh Skenario */}
-        <div className="bg-gray-50 rounded-xl p-4 border">
-          <h4 className="font-bold text-gray-700 mb-2 text-sm">💡 Contoh Skenario</h4>
-          <ul className="text-xs text-gray-600 space-y-1">
-            <li>• Pindah tab 1x (dalam toleransi 1x) → <b>0 pengurangan</b></li>
-            <li>• Pindah tab 2x → <b>-2 poin</b></li>
-            <li>• Keluar fullscreen 3x (toleransi 2x) → <b>-1 poin</b></li>
-            <li>• Copy/paste langsung (toleransi 0) → <b>-3 poin per kejadian</b></li>
-            <li>• Total &gt;= 8 poin → Peringatan pop-up muncul</li>
-            <li>• Total &gt;= 15 poin → Ujian di-submit otomatis</li>
-          </ul>
-        </div>
-      </div>
-      
-      <div className="p-4 border-t flex justify-end">
-        <button onClick={onClose} className="px-6 py-2 bg-indigo-600 text-white rounded-lg font-bold hover:bg-indigo-700">
-          Tutup
-        </button>
-      </div>
-    </div>
+const CreditBadge = ({ credits }) => (
+  <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-full">
+    <Coins size={15} className="text-amber-500" />
+    <span className="font-black text-amber-700 text-sm">{credits}</span>
+    <span className="text-amber-500 text-xs font-medium">kredit</span>
   </div>
 );
 
-const UTBKAdminApp = () => {
-  const [isCheckingRole, setIsCheckingRole] = useState(true);
-  const [screen, setScreen] = useState('admin_login'); 
-  const [adminEmail, setAdminEmail] = useState('');
-  const [adminPassword, setAdminPassword] = useState('');
-  
-  const [viewMode, setViewMode] = useState('tokens');
-  
-  const [tokenList, setTokenList] = useState([]);
-  const [userList, setUserList] = useState([]);
-  const [bankSoal, setBankSoal] = useState({});
-  const [filterStatus, setFilterStatus] = useState('all');
-  
-  const [newTokenName, setNewTokenName] = useState('');
-  const [newTokenSchool, setNewTokenSchool] = useState('');
-  const [newTokenPhone, setNewTokenPhone] = useState('');
-  
-  const [autoSendMode, setAutoSendMode] = useState('fonnte'); 
+const ScoreBadge = ({ pct }) => {
+  const cfg = pct >= 80 ? { bg: 'bg-emerald-500', label: 'Hebat!' }
+             : pct >= 60 ? { bg: 'bg-blue-500', label: 'Baik' }
+             : pct >= 40 ? { bg: 'bg-yellow-500', label: 'Cukup' }
+             :              { bg: 'bg-red-500', label: 'Perlu Latihan' };
+  return (
+    <span className={`${cfg.bg} text-white text-xs font-bold px-2.5 py-1 rounded-full`}>{cfg.label}</span>
+  );
+};
 
-  const [currentPage, setCurrentPage] = useState(1);
-  const [isNextAvailable, setIsNextAvailable] = useState(false);
-  const [lastVisible, setLastVisible] = useState(null);
-  const [firstVisible, setFirstVisible] = useState(null);
-  const [pageHistory, setPageHistory] = useState([]);
-
-  const [userCurrentPage, setUserCurrentPage] = useState(1);
-  const [userIsNextAvailable, setUserIsNextAvailable] = useState(false);
-  const [userLastVisible, setUserLastVisible] = useState(null);
-  const [userFirstVisible, setUserFirstVisible] = useState(null);
-  const [userPageHistory, setUserPageHistory] = useState([]);
-  const [searchEmail, setSearchEmail] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
-  
-  const [totalUsersCount, setTotalUsersCount] = useState(0);
-  const [totalTokensCount, setTotalTokensCount] = useState(0);
-  const [totalCreditsCount, setTotalCreditsCount] = useState(0);
-
-  const [showLeaderboard, setShowLeaderboard] = useState(false);
-  // ✅ BARU: State untuk modal violation rules
-  const [showViolationRules, setShowViolationRules] = useState(false);
-
-  const [selectedSubtest, setSelectedSubtest] = useState('pu');
-  const [questionType, setQuestionType] = useState('pilihan_ganda'); 
-  const [questionText, setQuestionText] = useState('');
-  const [questionImage, setQuestionImage] = useState(''); 
-  const [isUploading, setIsUploading] = useState(false);
-  const [options, setOptions] = useState(['', '', '', '', '']);
-  const [correctAnswer, setCorrectAnswer] = useState('A');
-  const [editingId, setEditingId] = useState(null);
-  const [isSending, setIsSending] = useState(false);
-  
-  // ✅ BARU: Ref untuk textarea (untuk rich text toolbar)
-  const questionTextareaRef = useRef(null);
-  const optionRefs = useRef([]);
-
-  const [showPreviewModal, setShowPreviewModal] = useState(false);
-  const [previewData, setPreviewData] = useState([]);
-  const [selectedRows, setSelectedRows] = useState([]); 
-  const [showCreditModal, setShowCreditModal] = useState(false);
-  const [selectedUserIds, setSelectedUserIds] = useState([]);
-  const [bulkCreditAmount, setBulkCreditAmount] = useState(0);
-  const [creditSearch, setCreditSearch] = useState('');
-  const [isProcessingCredits, setIsProcessingCredits] = useState(false);
-  const [showSoalImport, setShowSoalImport] = useState(false);
-  const [previewSoal, setPreviewSoal] = useState([]);
-
-  useEffect(() => {
-    const unsubscribe = auth.onAuthStateChanged(async (currentUser) => {
-      if (currentUser) {
-        setIsCheckingRole(true);
-        try {
-          const userDocRef = doc(db, 'users', currentUser.uid);
-          const userSnap = await getDoc(userDocRef);
-          if (userSnap.exists() && userSnap.data().role === 'admin') {
-            setScreen('dashboard');
-          } else {
-            alert("⛔ AKSES DITOLAK: Anda bukan Admin!");
-            await signOut(auth);
-            setScreen('admin_login');
-          }
-        } catch (error) {
-          console.error("Error verifikasi admin:", error);
-          setScreen('admin_login');
-        }
-      } else {
-        setScreen('admin_login');
-      }
-      setIsCheckingRole(false);
-    });
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    const q = query(collection(db, 'tokens'), orderBy('createdAt', 'desc'), limit(50));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const t = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setTokenList(t);
-      if (snapshot.docs.length > 0) {
-        setLastVisible(snapshot.docs[snapshot.docs.length - 1]);
-        setFirstVisible(snapshot.docs[0]);
-        setIsNextAvailable(snapshot.docs.length === 50);
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    const q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(20));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const u = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setUserList(u);
-      if (snapshot.docs.length > 0) {
-        setUserLastVisible(snapshot.docs[snapshot.docs.length - 1]);
-        setUserFirstVisible(snapshot.docs[0]);
-        setUserIsNextAvailable(snapshot.docs.length === 20);
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
-  useEffect(() => {
-    const loadCounts = async () => {
-      try {
-        const [usersSnap, tokensSnap] = await Promise.all([
-          getCountFromServer(collection(db, 'users')),
-          getCountFromServer(collection(db, 'tokens')),
-        ]);
-        setTotalUsersCount(usersSnap.data().count);
-        setTotalTokensCount(tokensSnap.data().count);
-      } catch (error) {
-        console.error("Error loading counts:", error);
-      }
-    };
-    if (screen === 'dashboard') loadCounts();
-  }, [screen]);
-
-  useEffect(() => {
-    setTotalCreditsCount(userList.reduce((acc, u) => acc + (u.credits || 0), 0));
-  }, [userList]);
-
-  useEffect(() => {
-    const loadBankSoal = async () => {
-      const loaded = {};
-      await Promise.all(SUBTESTS.map(async (subtest) => {
-        try {
-          const docSnap = await getDoc(doc(db, 'bank_soal', subtest.id));
-          loaded[subtest.id] = docSnap.exists() ? docSnap.data().questions : [];
-        } catch { loaded[subtest.id] = []; }
-      }));
-      setBankSoal(loaded);
-    };
-    loadBankSoal();
-  }, []);
-
-  // --- LOGIC IMPORT SOAL ---
-  const handleDownloadTemplateSoal = () => {
-    const data = [
-      { "Tipe (PG/ISIAN)": "PG", "Pertanyaan": "Ibu kota Indonesia adalah...", "Opsi A": "Jakarta", "Opsi B": "Bandung", "Opsi C": "Surabaya", "Opsi D": "Medan", "Opsi E": "Bali", "Kunci Jawaban": "A" },
-      { "Tipe (PG/ISIAN)": "ISIAN", "Pertanyaan": "Berapakah hasil 10 + 10?", "Opsi A": "-", "Opsi B": "-", "Opsi C": "-", "Opsi D": "-", "Opsi E": "-", "Kunci Jawaban": "20" }
-    ];
-    const ws = XLSX.utils.json_to_sheet(data);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Template Soal");
-    XLSX.writeFile(wb, "TEMPLATE_BANK_SOAL.xlsx");
-  };
-
-  const handleImportSoalFile = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const wb = XLSX.read(evt.target.result, { type: 'binary' });
-        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-        const parsed = data.map((row, idx) => {
-          const type = row["Tipe (PG/ISIAN)"]?.toUpperCase().includes("ISIAN") ? 'isian' : 'pilihan_ganda';
-          return {
-            id: Date.now() + idx, type,
-            question: row["Pertanyaan"],
-            options: type === 'isian' ? [] : [row["Opsi A"]||"", row["Opsi B"]||"", row["Opsi C"]||"", row["Opsi D"]||"", row["Opsi E"]||""],
-            correct: row["Kunci Jawaban"]?.toString(),
-            image: "",
-            valid: !!(row["Pertanyaan"] && row["Kunci Jawaban"])
-          };
-        });
-        setPreviewSoal(parsed);
-        setShowSoalImport(true);
-      } catch { alert("Gagal membaca file excel."); }
-    };
-    reader.readAsBinaryString(file);
-    e.target.value = null;
-  };
-
-  const saveBulkSoal = async () => {
-    if (previewSoal.length === 0) return;
-    if (!confirm(`Import ${previewSoal.length} soal ke ${SUBTESTS.find(s=>s.id===selectedSubtest).name}?`)) return;
-    try {
-      const currentQuestions = bankSoal[selectedSubtest] || [];
-      const newQuestions = previewSoal.filter(p => p.valid).map(({ valid, ...rest }) => rest);
-      const combined = [...currentQuestions, ...newQuestions];
-      await setDoc(doc(db, 'bank_soal', selectedSubtest), { questions: combined });
-      setBankSoal(prev => ({ ...prev, [selectedSubtest]: combined }));
-      alert("✅ Berhasil import soal!");
-      setShowSoalImport(false);
-      setPreviewSoal([]);
-    } catch (error) {
-      console.error(error);
-      alert("Gagal menyimpan ke database.");
-    }
-  };
-
-  const handleLogin = async (e) => { 
-    e.preventDefault(); 
-    try { 
-      const userCredential = await signInWithEmailAndPassword(auth, adminEmail, adminPassword); 
-      const userSnap = await getDoc(doc(db, 'users', userCredential.user.uid));
-      if (userSnap.exists() && userSnap.data().role === 'admin') {
-        setScreen('dashboard');
-      } else {
-        throw new Error("Akun ini tidak memiliki izin Admin.");
-      }
-    } catch (error) { 
-      alert('Login Gagal: ' + error.message);
-      await signOut(auth);
-    } 
-  };
-  
-  const handleLogout = async () => { await signOut(auth); setScreen('admin_login'); };
-
-  const isExpired = (createdAt) => {
-    if (!createdAt) return false;
-    return (Date.now() - new Date(createdAt).getTime()) > 24 * 60 * 60 * 1000;
-  };
-  
-  const expiredTokens = tokenList.filter(t => isExpired(t.createdAt));
-  const usedTokens = tokenList.filter(t => t.status === 'used' && !isExpired(t.createdAt));
-  const activeTokens = tokenList.filter(t => t.status === 'active' && !isExpired(t.createdAt));
-
-  const getFilteredList = () => { 
-    switch (filterStatus) { 
-      case 'active': return activeTokens; 
-      case 'used': return usedTokens; 
-      case 'expired': return expiredTokens; 
-      default: return tokenList; 
-    } 
-  };
-
-  const filteredUserList = userList.filter(u => {
-    const term = searchEmail.toLowerCase();
-    return (
-      (u.displayName || '').toLowerCase().includes(term) ||
-      (u.email || '').toLowerCase().includes(term) ||
-      (u.school || '').toLowerCase().includes(term)
-    );
-  });
-
-  const getLeaderboardData = () => {
-    return tokenList
-      .filter(t => t.score !== undefined && t.score !== null)
-      .sort((a, b) => b.score !== a.score ? b.score - a.score : b.finalTimeLeft - a.finalTimeLeft);
-  };
-
-  const fetchTokens = async (direction) => {
-    try {
-      let q;
-      if (direction === 'first') {
-        q = query(collection(db, 'tokens'), orderBy('createdAt', 'desc'), limit(50));
-        setCurrentPage(1);
-        setPageHistory([]);
-      } else if (direction === 'next' && lastVisible) {
-        q = query(collection(db, 'tokens'), orderBy('createdAt', 'desc'), startAfter(lastVisible), limit(50));
-        setPageHistory(prev => [...prev, firstVisible]);
-        setCurrentPage(p => p + 1);
-      } else if (direction === 'prev' && pageHistory.length > 0) {
-        const prev = pageHistory[pageHistory.length - 1];
-        q = query(collection(db, 'tokens'), orderBy('createdAt', 'desc'), startAfter(prev), limit(50));
-        setPageHistory(p => p.slice(0, -1));
-        setCurrentPage(p => p - 1);
-      } else return;
-
-      const snapshot = await getDocs(q);
-      const t = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setTokenList(t);
-      if (snapshot.docs.length > 0) {
-        setLastVisible(snapshot.docs[snapshot.docs.length - 1]);
-        setFirstVisible(snapshot.docs[0]);
-        setIsNextAvailable(snapshot.docs.length === 50);
-      } else setIsNextAvailable(false);
-    } catch (error) {
-      console.error("Error fetching tokens:", error);
-      alert("Gagal memuat data token");
-    }
-  };
-
-  const fetchUsers = async (direction) => {
-    try {
-      let q;
-      if (direction === 'first') {
-        q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(20));
-        setUserCurrentPage(1);
-        setUserPageHistory([]);
-      } else if (direction === 'next' && userLastVisible) {
-        q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), startAfter(userLastVisible), limit(20));
-        setUserPageHistory(prev => [...prev, userFirstVisible]);
-        setUserCurrentPage(p => p + 1);
-      } else if (direction === 'prev' && userPageHistory.length > 0) {
-        const prev = userPageHistory[userPageHistory.length - 1];
-        q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), startAfter(prev), limit(20));
-        setUserPageHistory(p => p.slice(0, -1));
-        setUserCurrentPage(p => p - 1);
-      } else return;
-
-      const snapshot = await getDocs(q);
-      const u = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setUserList(u);
-      if (snapshot.docs.length > 0) {
-        setUserLastVisible(snapshot.docs[snapshot.docs.length - 1]);
-        setUserFirstVisible(snapshot.docs[0]);
-        setUserIsNextAvailable(snapshot.docs.length === 20);
-      } else setUserIsNextAvailable(false);
-    } catch (error) {
-      alert("Gagal memuat data user");
-    }
-  };
-
-  const handleSearchUser = async () => {
-    if (!searchEmail.trim()) { fetchUsers('first'); return; }
-    setIsSearching(true);
-    try {
-      const snapshot = await getDocs(query(collection(db, 'users'), where('email', '==', searchEmail.trim().toLowerCase()), limit(10)));
-      const u = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setUserList(u);
-      if (u.length === 0) alert("Tidak ada user dengan email tersebut.");
-    } catch { alert("Gagal mencari user"); } 
-    finally { setIsSearching(false); }
-  };
-
-  const handleClearSearch = () => { setSearchEmail(''); fetchUsers('first'); };
-
-  // --- ACTIONS: TOKENS ---
-  const handleDownloadExcel = async () => {
-    if (!confirm("Download laporan lengkap dalam format Excel?")) return;
-    try {
-      const querySnapshot = await getDocs(query(collection(db, 'tokens'), orderBy('createdAt', 'desc')));
-      const dataToExport = querySnapshot.docs.map(doc => {
-        const d = doc.data();
-        return {
-          "Nama Siswa": d.studentName,
-          "Asal Sekolah": d.studentSchool || '-',
-          "No WhatsApp": d.studentPhone,
-          "Kode Token": d.tokenCode,
-          "Status": d.status,
-          "Nilai Akhir": d.score !== null ? d.score : "Belum Mengerjakan",
-          "Waktu Selesai": d.finishedAt ? new Date(d.finishedAt).toLocaleString('id-ID') : '-',
-          "Terkirim Via": d.sentMethod || '-',
-          // ✅ BARU: Tambahkan kolom violation score
-          "Poin Pelanggaran": d.violationScore || 0,
-        };
-      });
-      const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Data Nilai UTBK");
-      worksheet['!cols'] = [{wch:25},{wch:20},{wch:15},{wch:15},{wch:10},{wch:10},{wch:20},{wch:15},{wch:15}];
-      XLSX.writeFile(workbook, `Laporan_UTBK_${new Date().toISOString().slice(0,10)}.xlsx`);
-      alert("✅ Download Berhasil!");
-    } catch { alert("Gagal mendownload data."); }
-  };
-
-  const handleDownloadLeaderboard = async () => {
-    if (!confirm("Download data leaderboard lengkap dalam format Excel?")) return;
-    try {
-      const allTokens = [...tokenList].sort((a, b) => {
-        const sA = a.score ?? 0, sB = b.score ?? 0;
-        return sB !== sA ? sB - sA : (b.finalTimeLeft||0) - (a.finalTimeLeft||0);
-      });
-      const getVal = (t, id, type) => t.scoreDetails?.[id]?.[type] || 0;
-      const dataToExport = allTokens.map((t, idx) => ({
-        "Rank": idx + 1, "Nama Siswa": t.studentName, "Asal Sekolah": t.studentSchool || '-',
-        "PU - Benar": getVal(t,'pu','b'), "PU - Skor": getVal(t,'pu','skor'),
-        "PPU - Benar": getVal(t,'ppu','b'), "PPU - Skor": getVal(t,'ppu','skor'),
-        "PK - Benar": getVal(t,'pk','b'), "PK - Skor": getVal(t,'pk','skor'),
-        "PBM - Benar": getVal(t,'pbm','b'), "PBM - Skor": getVal(t,'pbm','skor'),
-        "Lit Indo - Benar": getVal(t,'lbi','b'), "Lit Indo - Skor": getVal(t,'lbi','skor'),
-        "Lit Inggris - Benar": getVal(t,'lbe','b'), "Lit Inggris - Skor": getVal(t,'lbe','skor'),
-        "PM - Benar": getVal(t,'pm','b'), "PM - Skor": getVal(t,'pm','skor'),
-        "RATA-RATA": t.score ?? 0,
-        "Poin Pelanggaran": t.violationScore || 0,
-      }));
-      const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-      const workbook = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Leaderboard UTBK");
-      XLSX.writeFile(workbook, `Leaderboard_UTBK_${new Date().toISOString().slice(0,10)}.xlsx`);
-      alert("✅ Download Berhasil!");
-    } catch { alert("Gagal mendownload data leaderboard."); }
-  };
-
-  const handleImportExcel = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (evt) => {
-      try {
-        const wb = XLSX.read(evt.target.result, { type: 'binary' });
-        const data = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]]);
-        if (data.length === 0) { alert("File kosong!"); e.target.value = null; return; }
-        const parsedData = data.map((row, index) => ({
-          id: index,
-          nama: row['Nama'] || row['nama'] || row['Name'] || '',
-          sekolah: row['Sekolah'] || row['sekolah'] || row['School'] || '-',
-          hp: row['HP'] || row['hp'] || row['Phone'] || '-',
-          valid: !!(row['Nama'] || row['nama'] || row['Name'])
-        }));
-        setPreviewData(parsedData);
-        setSelectedRows(parsedData.filter(r => r.valid).map(r => r.id));
-        setShowPreviewModal(true);
-      } catch { alert("Gagal membaca file. Pastikan format Excel benar."); } 
-      finally { e.target.value = null; }
-    };
-    reader.readAsBinaryString(file);
-  };
-
-  const executeBulkImport = async () => {
-    if (selectedRows.length === 0) { alert("Tidak ada data yang dipilih!"); return; }
-    setIsSending(true);
-    setShowPreviewModal(false);
-    try {
-      const dataToImport = previewData.filter(row => selectedRows.includes(row.id));
-      const chunks = [];
-      for (let i = 0; i < dataToImport.length; i += 450) chunks.push(dataToImport.slice(i, i + 450));
-      let successCount = 0;
-      for (const chunk of chunks) {
-        const batchOp = writeBatch(db);
-        chunk.forEach((row) => {
-          const tokenCode = `UTBK-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-          batchOp.set(doc(db, 'tokens', tokenCode), {
-            tokenCode, studentName: row.nama, studentSchool: row.sekolah, studentPhone: row.hp,
-            status: 'active', createdAt: new Date().toISOString(), isSent: false, sentMethod: '-',
-            score: null, createdBy: 'ADMIN_BULK', violationScore: 0
-          });
-          successCount++;
-        });
-        await batchOp.commit();
-      }
-      alert(`✅ Sukses generate ${successCount} token!`);
-      fetchTokens('first');
-    } catch { alert("Gagal melakukan import massal."); } 
-    finally { setIsSending(false); setPreviewData([]); setSelectedRows([]); }
-  };
-
-  const markAsSent = async (tokenCode, method) => {
-    try { await updateDoc(doc(db, 'tokens', tokenCode), { isSent: true, sentMethod: method, sentAt: new Date().toISOString() }); } 
-    catch (error) { console.error(error); }
-  };
-
-  const sendFonnteMessage = async (name, phone, token) => {
-    if (!FONNTE_TOKEN) { alert("Token Fonnte Kosong!"); return; }
-    setIsSending(true);
-    let p = phone.toString().replace(/\D/g, '');
-    if (p.startsWith('0')) p = '62' + p.slice(1);
-    const message = `Halo *${name}*,\n\nBerikut adalah akses ujian kamu:\n🔑 Token: *${token}*\n🔗 Link: ${STUDENT_APP_URL}\n\n⚠️ *Penting:* Token ini hanya berlaku 1x24 jam.\n\nSelamat mengerjakan!`;
-    try {
-      const params = new URLSearchParams({ token: FONNTE_TOKEN, target: p, message, delay: SEND_DELAY, countryCode: '62' });
-      await fetch(`https://api.fonnte.com/send?${params.toString()}`, { method: 'GET', mode: 'no-cors' });
-      await markAsSent(token, 'Fonnte (Auto)');
-      alert(`✅ (FONNTE) Pesan dikirim ke ${name}`);
-    } catch { alert("❌ Gagal Kirim Fonnte."); } 
-    finally { setIsSending(false); }
-  };
-
-  const sendJsDirect = async (name, phone, token) => {
-    let p = phone.toString().replace(/\D/g, '');
-    if (p.startsWith('0')) p = '62' + p.slice(1);
-    const message = `Halo *${name}*,\n\nBerikut adalah akses ujian kamu:\n🔑 Token: *${token}*\n🔗 Link: ${STUDENT_APP_URL}\n\n⚠️ *Penting:* Token ini hanya berlaku 1x24 jam.\n\nSelamat mengerjakan!`;
-    window.location.href = `whatsapp://send?phone=${p}&text=${encodeURIComponent(message)}`;
-    await markAsSent(token, 'JS App (Direct)');
-  };
-
-  const sendManualWeb = async (name, phone, token) => {
-    let p = phone.toString().replace(/\D/g, '');
-    if (p.startsWith('0')) p = '62' + p.slice(1);
-    const message = `Halo *${name}*,\n\nBerikut adalah akses ujian kamu:\n🔑 Token: *${token}*\n🔗 Link: ${STUDENT_APP_URL}\n\n⚠️ *Penting:* Token ini hanya berlaku 1x24 jam.\n\nSelamat mengerjakan!`;
-    window.open(`https://wa.me/${p}?text=${encodeURIComponent(message)}`, '_blank');
-    await markAsSent(token, 'WA Web (Manual)');
-  };
-
-  const createToken = async () => {
-    if (!newTokenName || !newTokenPhone || !newTokenSchool) { alert('Isi Nama, Sekolah & HP!'); return; } 
-    const tokenCode = `UTBK-${Math.random().toString(36).substring(2, 8).toUpperCase()}`;
-    try { 
-      await setDoc(doc(db, 'tokens', tokenCode), { 
-        tokenCode, studentName: newTokenName, studentSchool: newTokenSchool, studentPhone: newTokenPhone,
-        status: 'active', createdAt: new Date().toISOString(), isSent: false, sentMethod: '-',
-        score: null, createdBy: 'ADMIN', violationScore: 0
-      });
-      if(confirm(`Token Berhasil: ${tokenCode}\n\nKirim via Jalur Default?`)) {
-        if (autoSendMode === 'fonnte') await sendFonnteMessage(newTokenName, newTokenPhone, tokenCode);
-        else if (autoSendMode === 'js_app') await sendJsDirect(newTokenName, newTokenPhone, tokenCode);
-        else await sendManualWeb(newTokenName, newTokenPhone, tokenCode);
-      }
-      setNewTokenName(''); setNewTokenPhone(''); setNewTokenSchool('');
-      fetchTokens('first');
-    } catch { alert('Gagal generate token.'); }
-  };
-
-  const deleteToken = async (code) => { if(confirm('Hapus token ini?')) { await deleteDoc(doc(db, 'tokens', code)); fetchTokens('first'); }};
-  
-  const resetScore = async (code) => {
-    if(confirm('Reset ujian siswa ini? Status akan kembali AKTIF dan nilai dihapus.')) {
-      await updateDoc(doc(db, 'tokens', code), {
-        status: 'active', score: null, answers: {}, finalTimeLeft: null,
-        createdAt: new Date().toISOString(), violationScore: 0
-      });
-      fetchTokens('first');
-    }
-  };
-
-  const deleteAllTokens = async () => { 
-    if (!confirm("⚠️ PERINGATAN: Hapus SEMUA data?")) return; 
-    try { 
-      await Promise.all(tokenList.map(t => deleteDoc(doc(db, "tokens", t.tokenCode)))); 
-      alert("Semua terhapus."); fetchTokens('first'); 
-    } catch { alert("Gagal."); } 
-  };
-  
-  // --- ACTIONS: USER MANAGEMENT ---
-  const handleAddCredits = async (userId) => {
-    const amount = prompt("Masukkan jumlah credit yang ingin ditambahkan (cth: 5):");
-    if(amount && !isNaN(amount)) {
-      try {
-        await updateDoc(doc(db, 'users', userId), { credits: increment(parseInt(amount)) });
-        alert(`Berhasil menambahkan ${amount} credits.`);
-      } catch { alert("Gagal update credits."); }
-    }
-  };
-
-  const handleDeleteUser = async (userId) => {
-    if(confirm("Hapus user ini? Data credit akan hilang.")) await deleteDoc(doc(db, 'users', userId));
-  };
-
-  const getModalUserList = () => {
-    if (!creditSearch) return userList;
-    const lower = creditSearch.toLowerCase();
-    return userList.filter(u => 
-      (u.displayName?.toLowerCase().includes(lower)) ||
-      (u.email?.toLowerCase().includes(lower)) ||
-      (u.school?.toLowerCase().includes(lower))
-    );
-  };
-
-  const toggleUserSelection = (id) => {
-    setSelectedUserIds(prev => prev.includes(id) ? prev.filter(uid => uid !== id) : [...prev, id]);
-  };
-
-  const toggleSelectAllUsersInModal = () => {
-    const visibleUsers = getModalUserList();
-    if (selectedUserIds.length === visibleUsers.length && visibleUsers.length > 0) setSelectedUserIds([]);
-    else setSelectedUserIds(visibleUsers.map(u => u.id));
-  };
-
-  const executeBulkCredits = async () => {
-    if (selectedUserIds.length === 0) { alert("Pilih minimal satu user!"); return; }
-    if (bulkCreditAmount <= 0) { alert("Jumlah credit harus lebih dari 0!"); return; }
-    if (!confirm(`Kirim ${bulkCreditAmount} Credits ke ${selectedUserIds.length} user terpilih?`)) return;
-    setIsProcessingCredits(true);
-    try {
-      const batch = writeBatch(db);
-      selectedUserIds.forEach(userId => batch.update(doc(db, 'users', userId), { credits: increment(parseInt(bulkCreditAmount)) }));
-      await batch.commit();
-      alert("✅ Berhasil mendistribusikan credits!");
-      setShowCreditModal(false);
-      setSelectedUserIds([]);
-      setBulkCreditAmount(0);
-      fetchUsers('first');
-    } catch { alert("Gagal mengirim credits."); } 
-    finally { setIsProcessingCredits(false); }
-  };
-
-  // --- ACTIONS: LEADERBOARD & BANK SOAL ---
-  const resetLeaderboard = async () => {
-    if (!confirm("⚠️ RESET SEMUA SKOR DI LEADERBOARD?\nToken akan tetap aktif, tapi nilai akan hilang.")) return;
-    try {
-      const querySnapshot = await getDocs(collection(db, 'tokens'));
-      const updates = [];
-      querySnapshot.forEach((docSnap) => {
-        if (docSnap.data().score !== undefined) {
-          updates.push(updateDoc(docSnap.ref, { 
-            score: deleteField(), finalTimeLeft: deleteField(), finishedAt: deleteField(), 
-            status: 'active', answers: {}, violationScore: 0 
-          }));
-        }
-      });
-      await Promise.all(updates); 
-      alert("✅ Leaderboard Berhasil Direset!"); 
-    } catch { alert("Gagal reset."); }
-  };
-
-  const saveSoal = async (sid, q) => { await setDoc(doc(db, 'bank_soal', sid), { questions: q }); setBankSoal(p => ({ ...p, [sid]: q })); };
-  
-  const addOrUpdate = async () => {
-    if (!questionText.trim()) { alert('Pertanyaan wajib diisi!'); return; }
-    if (questionType !== 'isian' && options.some(o => !o.trim())) { alert('Semua opsi wajib diisi!'); return; }
-    if (questionType === 'pilihan_majemuk' && (!Array.isArray(correctAnswer) || correctAnswer.length === 0)) { alert('Pilih minimal 1 kunci!'); return; }
-    if (questionType === 'isian' && (!correctAnswer || correctAnswer.toString().trim() === '')) { alert('Isi kunci jawaban!'); return; }
-    const newQuestion = { 
-      id: editingId || Date.now().toString(), type: questionType, question: questionText,
-      image: questionImage, options: questionType === 'isian' ? [] : options, correct: correctAnswer 
-    };
-    const currentQuestions = bankSoal[selectedSubtest] || [];
-    const updatedQuestions = editingId ? currentQuestions.map(q => q.id === editingId ? newQuestion : q) : [...currentQuestions, newQuestion];
-    await saveSoal(selectedSubtest, updatedQuestions); 
-    alert('Disimpan!'); 
-    resetForm();
-  };
-
-  const deleteSoal = async (id) => { 
-    if(confirm('Hapus soal ini?')) {
-      await saveSoal(selectedSubtest, (bankSoal[selectedSubtest] || []).filter(x => x.id !== id)); 
-    }
-  };
-  
-  const resetForm = () => { setQuestionText(''); setQuestionImage(''); setOptions(['', '', '', '', '']); setEditingId(null); handleTypeChange('pilihan_ganda'); };
-  
-  const handleTypeChange = (type) => {
-    setQuestionType(type);
-    if (type === 'pilihan_ganda') setCorrectAnswer('A');
-    else if (type === 'pilihan_majemuk') setCorrectAnswer([]); 
-    else if (type === 'isian') setCorrectAnswer(''); 
-  };
-  
-  const loadSoalForEdit = (q) => {
-    setQuestionText(q.question); setQuestionImage(q.image || ''); setQuestionType(q.type || 'pilihan_ganda'); 
-    if (q.type === 'isian') { setOptions(['', '', '', '', '']); setCorrectAnswer(q.correct); } 
-    else { setOptions([...q.options]); setCorrectAnswer(q.correct); }
-    setEditingId(q.id); 
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  const handleImageUpload = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (file.size > 1024 * 1024) { alert("⚠️ File terlalu besar! Maksimal 1MB."); return; }
-    setIsUploading(true); 
-    const reader = new FileReader();
-    reader.onloadend = () => { setQuestionImage(reader.result); setIsUploading(false); };
-    reader.readAsDataURL(file);
-  };
-
-  const generateDummy = async () => { 
-    if (!confirm('Isi Dummy?')) return; 
-    const n = { ...bankSoal }; 
-    for (const s of SUBTESTS) { 
-      const cur = bankSoal[s.id] || []; 
-      const need = s.questions - cur.length; 
-      if (need > 0) { 
-        const d = Array.from({length: need}, (_, i) => ({ id: `d_${s.id}_${i}`, question: `Dummy ${s.name} ${i+1}`, image: '', options: ['A','B','C','D','E'], correct: 'A' })); 
-        const fin = [...cur, ...d]; 
-        await setDoc(doc(db, 'bank_soal', s.id), { questions: fin }); 
-        n[s.id] = fin; 
-      } 
-    } 
-    setBankSoal(n); 
-    alert('Dummy Done!'); 
-  };
-
-  // --- UI COMPONENTS ---
-  const PreviewUploadModal = () => {
-    const validCount = previewData.filter(r => r.valid).length;
-    const invalidCount = previewData.length - validCount;
-    const toggleRowSelection = (id) => setSelectedRows(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
-    const toggleSelectAll = () => setSelectedRows(selectedRows.length === validCount && validCount > 0 ? [] : previewData.filter(r => r.valid).map(r => r.id));
-
-    return (
-      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] flex flex-col">
-          <div className="p-6 border-b bg-gradient-to-r from-indigo-600 to-purple-600 rounded-t-2xl text-white">
-            <div className="flex justify-between items-center">
-              <div>
-                <h2 className="text-xl font-bold flex items-center gap-2"><Eye size={24} /> Preview Data Excel (Siswa)</h2>
-                <p className="text-sm text-indigo-100 mt-1">Periksa dan pilih data siswa yang akan di-generate tokennya</p>
+// ─── CONFIRM MODAL ────────────────────────────────────────────────────────────
+const ConfirmModal = ({ subtest, credits, onConfirm, onCancel }) => {
+  const g = GROUP_COLORS[subtest.group];
+  return (
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="bg-white rounded-3xl shadow-2xl w-full max-w-sm overflow-hidden animate-in zoom-in-95 duration-200">
+        <div className={`bg-gradient-to-br ${g.bg} p-8 text-center text-white`}>
+          <div className="text-5xl mb-3">{subtest.icon}</div>
+          <h3 className="text-xl font-black">{subtest.name}</h3>
+          <p className="text-white/70 text-sm mt-1">{subtest.group}</p>
+        </div>
+        <div className="p-6 space-y-4">
+          <div className="grid grid-cols-3 gap-3 text-center">
+            {[
+              { label: 'Soal', val: subtest.questions, icon: <BookOpen size={16}/> },
+              { label: 'Waktu', val: `${subtest.time} mnt`, icon: <Clock size={16}/> },
+              { label: 'Biaya', val: `${CREDIT_COST} kredit`, icon: <Coins size={16}/> },
+            ].map(({ label, val, icon }) => (
+              <div key={label} className="bg-gray-50 rounded-xl p-3">
+                <div className="text-gray-400 flex justify-center mb-1">{icon}</div>
+                <div className="font-black text-gray-800 text-sm">{val}</div>
+                <div className="text-gray-400 text-[10px] uppercase font-bold">{label}</div>
               </div>
-              <button onClick={() => { setShowPreviewModal(false); setPreviewData([]); setSelectedRows([]); }} className="hover:bg-white/20 p-2 rounded-full transition"><X size={20} /></button>
+            ))}
+          </div>
+
+          <div className={`flex items-center gap-3 p-3 rounded-xl ${credits < CREDIT_COST ? 'bg-red-50 border border-red-200' : 'bg-amber-50 border border-amber-200'}`}>
+            <Coins size={18} className={credits < CREDIT_COST ? 'text-red-500' : 'text-amber-500'} />
+            <div>
+              <p className={`text-sm font-bold ${credits < CREDIT_COST ? 'text-red-700' : 'text-amber-700'}`}>
+                {credits < CREDIT_COST ? 'Kredit tidak cukup!' : `Saldo: ${credits} kredit → tersisa ${credits - CREDIT_COST}`}
+              </p>
+              {credits < CREDIT_COST && <p className="text-xs text-red-500 mt-0.5">Hubungi admin untuk top up kredit.</p>}
             </div>
           </div>
-          <div className="p-4 bg-gray-50 border-b grid grid-cols-3 gap-4">
-            <div className="text-center"><div className="text-2xl font-bold text-gray-800">{previewData.length}</div><div className="text-xs text-gray-500 uppercase">Total Baris</div></div>
-            <div className="text-center"><div className="text-2xl font-bold text-green-600">{validCount}</div><div className="text-xs text-gray-500 uppercase">Valid</div></div>
-            <div className="text-center"><div className="text-2xl font-bold text-red-600">{invalidCount}</div><div className="text-xs text-gray-500 uppercase">Invalid</div></div>
-          </div>
-          <div className="p-6 overflow-y-auto flex-1">
-            <div className="mb-4 flex justify-between items-center">
-              <label className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
-                <input type="checkbox" checked={selectedRows.length === validCount && validCount > 0} onChange={toggleSelectAll} className="w-4 h-4 rounded border-gray-300"/>
-                <span className="text-sm font-bold text-gray-700">Pilih Semua Valid ({selectedRows.length} dipilih)</span>
-              </label>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-gray-100 text-gray-700 font-bold uppercase text-xs sticky top-0">
-                  <tr><th className="p-3 text-center w-12">#</th><th className="p-3 text-left">Nama Siswa</th><th className="p-3 text-left">Asal Sekolah</th><th className="p-3 text-left">No. WhatsApp</th><th className="p-3 text-center">Status</th><th className="p-3 text-center w-16">Pilih</th></tr>
-                </thead>
-                <tbody className="divide-y">
-                  {previewData.map((row, index) => (
-                    <tr key={row.id} className={`hover:bg-gray-50 ${!row.valid ? 'bg-red-50' : ''} ${selectedRows.includes(row.id) ? 'bg-indigo-50' : ''}`}>
-                      <td className="p-3 text-center text-gray-500 font-mono text-xs">{index + 1}</td>
-                      <td className="p-3"><div className={`font-bold ${row.nama ? 'text-gray-800' : 'text-red-500 italic'}`}>{row.nama || '(Kosong)'}</div></td>
-                      <td className="p-3 text-gray-600">{row.sekolah}</td>
-                      <td className="p-3 font-mono text-gray-600">{row.hp}</td>
-                      <td className="p-3 text-center">{row.valid ? <span className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-bold">VALID</span> : <span className="px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-bold">INVALID</span>}</td>
-                      <td className="p-3 text-center"><input type="checkbox" checked={selectedRows.includes(row.id)} onChange={() => toggleRowSelection(row.id)} disabled={!row.valid} className="w-4 h-4 rounded border-gray-300 disabled:opacity-30"/></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          <div className="p-6 border-t flex justify-end gap-3">
-            <button onClick={() => { setShowPreviewModal(false); setPreviewData([]); setSelectedRows([]); }} className="px-6 py-2 border rounded">Batal</button>
-            <button onClick={executeBulkImport} disabled={isSending} className="px-6 py-2 bg-indigo-600 text-white rounded font-bold hover:bg-indigo-700 disabled:bg-gray-400">
-              {isSending ? 'Proses...' : 'Import Token'}
+
+          <div className="flex gap-3 pt-2">
+            <button onClick={onCancel} className="flex-1 py-3 border-2 border-gray-200 rounded-xl font-bold text-gray-600 hover:bg-gray-50 transition">Batal</button>
+            <button
+              onClick={onConfirm}
+              disabled={credits < CREDIT_COST}
+              className={`flex-1 py-3 rounded-xl font-black text-white transition shadow-lg ${credits < CREDIT_COST ? 'bg-gray-300 cursor-not-allowed' : `bg-gradient-to-r ${g.bg} hover:opacity-90 active:scale-95`}`}
+            >
+              Mulai Latihan
             </button>
           </div>
         </div>
       </div>
-    );
-  };
+    </div>
+  );
+};
 
-  const LeaderboardModal = () => {
-    const sortedData = tokenList
-      .filter(t => t.score !== undefined && t.score !== null)
-      .sort((a, b) => b.score !== a.score ? b.score - a.score : b.finalTimeLeft - a.finalTimeLeft);
-
-    return (
-      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-[95%] h-[90vh] flex flex-col animate-in fade-in zoom-in duration-200">
-          <div className="p-4 border-b flex justify-between items-center bg-teal-700 rounded-t-2xl text-white">
-            <h2 className="text-xl font-bold flex items-center gap-2"><Trophy size={24} className="text-yellow-300" /> Leaderboard Lengkap (IRT Style)</h2>
-            <div className="flex items-center gap-2">
-              <button onClick={handleDownloadLeaderboard} className="flex items-center gap-2 bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded-lg font-bold transition shadow-lg"><List size={18} /> Download Excel</button>
-              <button onClick={() => setShowLeaderboard(false)} className="hover:bg-teal-800 p-2 rounded-full transition"><X size={20} /></button>
-            </div>
-          </div>
-          <div className="p-4 bg-gray-50 border-b flex justify-end">
-            <button onClick={resetLeaderboard} className="flex items-center gap-2 bg-red-50 text-red-600 px-4 py-2 rounded-lg font-bold hover:bg-red-100 transition border border-red-200 text-sm"><Trash2 size={16} /> Reset Semua Data Peringkat</button>
-          </div>
-          <div className="flex-1 overflow-auto p-4 bg-gray-100">
-            <div className="bg-white shadow-lg border border-gray-300">
-              <table className="min-w-full text-[10px] md:text-xs border-collapse font-sans">
-                <thead className="sticky top-0 z-10">
-                  <tr className="bg-teal-700 text-white font-bold text-center uppercase tracking-wider">
-                    <th rowSpan="2" className="border border-gray-400 p-2 w-10">Rank</th>
-                    <th rowSpan="2" className="border border-gray-400 p-2 min-w-[150px]">Nama Siswa</th>
-                    <th rowSpan="2" className="border border-gray-400 p-2 min-w-[120px]">Sekolah</th>
-                    {['PU','PPU','PK','PBM','Lit. Indo','Lit. Ing','PM'].map(s => (
-                      <th key={s} colSpan="2" className="border border-gray-400 p-1 bg-teal-800">{s}</th>
-                    ))}
-                    <th rowSpan="2" className="border border-gray-400 p-2 w-16 bg-yellow-600 text-white">RATA RATA</th>
-                    <th rowSpan="2" className="border border-gray-400 p-2 w-16 bg-orange-600 text-white">⚠️ PNL</th>
-                  </tr>
-                  <tr className="bg-teal-600 text-white font-bold text-center text-[9px] uppercase">
-                    {Array(7).fill(null).map((_, i) => (
-                      <React.Fragment key={i}>
-                        <th className="border border-gray-400 px-1 py-1 w-8 bg-teal-600">B</th>
-                        <th className="border border-gray-400 px-1 py-1 w-10 bg-teal-500">Skor</th>
-                      </React.Fragment>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="text-gray-900 bg-white">
-                  {sortedData.length === 0 ? (
-                    <tr><td colSpan="22" className="p-8 text-center text-gray-400 italic">Belum ada data nilai masuk.</td></tr>
-                  ) : sortedData.map((t, idx) => {
-                    const getVal = (id, type) => t.scoreDetails?.[id]?.[type] || 0;
-                    return (
-                      <tr key={t.tokenCode} className={`text-center hover:bg-yellow-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`}>
-                        <td className="border border-gray-300 p-2 font-bold">{idx + 1}</td>
-                        <td className="border border-gray-300 p-2 text-left font-medium truncate max-w-[200px]">{t.studentName}</td>
-                        <td className="border border-gray-300 p-2 text-left truncate max-w-[150px]">{t.studentSchool || '-'}</td>
-                        {['pu','ppu','pk','pbm','lbi','lbe','pm'].map(id => (
-                          <React.Fragment key={id}>
-                            <td className="border border-gray-300 p-1 text-gray-500">{getVal(id, 'b')}</td>
-                            <td className="border border-gray-300 p-1 font-semibold text-teal-700 bg-teal-50/30">{getVal(id, 'skor')}</td>
-                          </React.Fragment>
-                        ))}
-                        <td className="border border-gray-300 p-2 font-black text-white bg-yellow-500 text-sm">{t.score}</td>
-                        {/* ✅ BARU: Kolom Poin Pelanggaran di Leaderboard */}
-                        <td className={`border border-gray-300 p-2 font-bold text-sm ${(t.violationScore||0) >= VIOLATION_SCORING.warningThreshold ? 'bg-red-100 text-red-600' : 'text-gray-400'}`}>
-                          {t.violationScore || 0}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  const BulkCreditModal = () => {
-    const [localSearch, setLocalSearch] = useState('');
-    const visibleUsers = userList.filter(u => 
-      (u.displayName?.toLowerCase().includes(localSearch.toLowerCase())) ||
-      (u.email?.toLowerCase().includes(localSearch.toLowerCase())) ||
-      (u.school?.toLowerCase().includes(localSearch.toLowerCase()))
-    );
-    const isAllSelected = visibleUsers.length > 0 && selectedUserIds.length === visibleUsers.length;
-
-    return (
-      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col animate-in fade-in zoom-in duration-200">
-          <div className="p-6 border-b flex justify-between items-center bg-gradient-to-r from-green-600 to-emerald-600 rounded-t-2xl text-white">
-            <div>
-              <h2 className="text-xl font-bold flex items-center gap-2"><Coins size={24} className="text-yellow-300"/> Distribusi Credits Massal</h2>
-              <p className="text-green-100 text-sm mt-1">Pilih user dan tentukan jumlah credit.</p>
-            </div>
-            <button onClick={() => setShowCreditModal(false)} className="hover:bg-white/20 p-2 rounded-full transition"><X size={20}/></button>
-          </div>
-          <div className="p-4 bg-gray-50 border-b">
-            <div className="relative">
-              <Search size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
-              <input type="text" placeholder="Ketik Nama, Email, atau Sekolah..." value={localSearch} onChange={(e) => setLocalSearch(e.target.value)} className="w-full pl-10 p-3 border rounded-lg focus:ring-2 focus:ring-green-200 outline-none" autoFocus/>
-            </div>
-          </div>
-          <div className="flex-1 overflow-y-auto p-0">
-            <table className="w-full text-sm text-left">
-              <thead className="bg-gray-100 sticky top-0 text-gray-600 font-bold uppercase text-xs">
-                <tr>
-                  <th className="p-4 w-12 text-center">
-                    <input type="checkbox" checked={isAllSelected} onChange={() => { if (isAllSelected) setSelectedUserIds([]); else setSelectedUserIds(visibleUsers.map(u => u.id)); }} className="w-4 h-4 rounded cursor-pointer"/>
-                  </th>
-                  <th className="p-4">User Detail</th><th className="p-4">Sekolah</th><th className="p-4 text-center">Saldo</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {visibleUsers.map(u => (
-                  <tr key={u.id} className={`hover:bg-green-50 transition cursor-pointer ${selectedUserIds.includes(u.id) ? 'bg-green-50' : ''}`} onClick={() => toggleUserSelection(u.id)}>
-                    <td className="p-4 text-center"><input type="checkbox" checked={selectedUserIds.includes(u.id)} onChange={() => {}} className="w-4 h-4 rounded cursor-pointer"/></td>
-                    <td className="p-4"><div className="font-bold text-gray-800">{u.displayName || 'No Name'}</div><div className="text-xs text-gray-500">{u.email}</div></td>
-                    <td className="p-4 text-gray-600">{u.school || '-'}</td>
-                    <td className="p-4 text-center"><span className="bg-gray-100 text-gray-600 px-2 py-1 rounded font-mono font-bold">{u.credits || 0}</span></td>
-                  </tr>
-                ))}
-                {visibleUsers.length === 0 && <tr><td colSpan="4" className="p-8 text-center text-gray-400">Tidak ditemukan.</td></tr>}
-              </tbody>
-            </table>
-          </div>
-          <div className="p-6 border-t bg-gray-50 rounded-b-2xl flex items-center justify-between gap-4">
-            <div className="text-sm font-bold text-gray-600">Terpilih: <span className="text-green-600 text-lg">{selectedUserIds.length}</span> User</div>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 bg-white border rounded-lg px-3 py-2">
-                <span className="text-gray-500 text-sm font-bold">Jumlah:</span>
-                <input type="number" min="1" value={bulkCreditAmount} onChange={(e) => setBulkCreditAmount(e.target.value)} className="w-20 font-bold text-center outline-none border-b-2 border-green-500 focus:border-green-700"/>
-              </div>
-              <button onClick={executeBulkCredits} disabled={isProcessingCredits || selectedUserIds.length === 0} className="bg-green-600 text-white px-6 py-3 rounded-lg font-bold hover:bg-green-700 disabled:bg-gray-400 flex items-center gap-2 shadow-lg transition">
-                {isProcessingCredits ? <Loader2 className="animate-spin"/> : <Send size={18}/>} Kirim
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  };
-
-  if (isCheckingRole) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="flex flex-col items-center">
-          <Loader2 className="animate-spin text-indigo-600 mb-4" size={40} />
-          <p className="text-gray-500 font-bold">Memverifikasi Hak Akses...</p>
-        </div>
-      </div>
-    );
-  }
-
-  if (screen === 'admin_login') {
-    return (
-      <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-        <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full">
-          <h2 className="text-2xl font-bold mb-6 text-center text-gray-800">Admin Portal</h2>
-          <form onSubmit={handleLogin} className="space-y-4">
-            <input type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} className="w-full p-3 border rounded" placeholder="Email" required/>
-            <input type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} className="w-full p-3 border rounded" placeholder="Password" required/>
-            <button className="w-full bg-indigo-600 text-white py-3 rounded font-bold hover:bg-indigo-700">Masuk</button>
-          </form>
-          <div className="mt-8 text-center text-xs text-gray-400 font-mono">© {new Date().getFullYear()} Liezira</div>
-        </div>
-      </div>
-    );
-  }
+// ─── RESULT SCREEN ────────────────────────────────────────────────────────────
+const ResultScreen = ({ subtest, result, onBack, onRetry, credits }) => {
+  const g = GROUP_COLORS[subtest.group];
+  const bars = [
+    { label: 'Benar', val: result.correct, max: result.total, color: 'bg-emerald-500' },
+    { label: 'Salah', val: result.total - result.correct, max: result.total, color: 'bg-red-400' },
+  ];
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      {showPreviewModal && <PreviewUploadModal />}
-      {showLeaderboard && <LeaderboardModal />}
-      {showCreditModal && <BulkCreditModal />}
-      {/* ✅ BARU: Modal Violation Rules */}
-      {showViolationRules && <ViolationRulesModal onClose={() => setShowViolationRules(false)} />}
-
-      {showSoalImport && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-6xl max-h-[90vh] flex flex-col">
-            <div className="p-6 border-b bg-indigo-600 text-white rounded-t-2xl flex justify-between">
-              <h2 className="text-xl font-bold flex items-center gap-2"><UploadCloud /> Preview Import Soal</h2>
-              <button onClick={() => setShowSoalImport(false)}><X /></button>
-            </div>
-            <div className="p-4 bg-gray-50 border-b flex justify-between items-center">
-              <div>Target: <span className="font-bold text-indigo-600">{SUBTESTS.find((s) => s.id === selectedSubtest)?.name}</span></div>
-              <div className="text-sm">Total: <b>{previewSoal.length}</b> | Valid: <b className="text-green-600">{previewSoal.filter((s) => s.valid).length}</b></div>
-            </div>
-            <div className="flex-1 overflow-auto p-4">
-              <table className="w-full text-sm border-collapse">
-                <thead className="bg-gray-100 sticky top-0">
-                  <tr><th className="p-2 border">Tipe</th><th className="p-2 border">Pertanyaan</th><th className="p-2 border">Opsi (A/B/C/D/E)</th><th className="p-2 border">Kunci</th><th className="p-2 border">Status</th></tr>
-                </thead>
-                <tbody>
-                  {previewSoal.map((s, i) => (
-                    <tr key={i} className={s.valid ? 'bg-white' : 'bg-red-50'}>
-                      <td className="p-2 border text-center uppercase text-xs font-bold">{s.type}</td>
-                      <td className="p-2 border truncate max-w-xs">{s.question}</td>
-                      <td className="p-2 border text-xs text-gray-500">{s.type === 'isian' ? '-' : s.options.join(' | ')}</td>
-                      <td className="p-2 border text-center font-bold">{s.correct}</td>
-                      <td className="p-2 border text-center">{s.valid ? <CheckCircle2 className="text-green-500 w-5 h-5 mx-auto" /> : <XCircle className="text-red-500 w-5 h-5 mx-auto" />}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="p-6 border-t flex justify-end gap-3">
-              <button onClick={() => setShowSoalImport(false)} className="px-6 py-2 border rounded">Batal</button>
-              <button onClick={saveBulkSoal} className="px-6 py-2 bg-indigo-600 text-white rounded font-bold hover:bg-indigo-700">Import Sekarang</button>
-            </div>
+    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
+      <div className="bg-white rounded-3xl shadow-xl w-full max-w-md overflow-hidden">
+        {/* Header */}
+        <div className={`bg-gradient-to-br ${g.bg} p-8 text-white text-center relative overflow-hidden`}>
+          <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-white/10"></div>
+          <div className="absolute -bottom-6 -left-6 w-24 h-24 rounded-full bg-white/10"></div>
+          <div className="relative z-10">
+            <div className="text-5xl mb-3">{subtest.icon}</div>
+            <h2 className="text-xl font-black">{subtest.name}</h2>
+            <p className="text-white/70 text-sm mt-1">Sesi Latihan Selesai</p>
           </div>
         </div>
-      )}
 
-      {/* --- NAVBAR --- */}
-      <div className="sticky top-0 z-40 bg-white shadow px-6 py-4 flex justify-between items-center mb-6">
-        <h1 className="text-xl font-bold text-indigo-900">Admin Panel</h1>
-        <div className="flex gap-2 flex-wrap justify-end">
-          <button onClick={() => setViewMode('tokens')} className={`px-4 py-2 rounded ${viewMode === 'tokens' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600'}`}>Token</button>
-          <button onClick={() => setViewMode('users')} className={`px-4 py-2 rounded flex items-center gap-2 ${viewMode === 'users' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600'}`}><Users size={16} /> Users & Credits</button>
-          <button onClick={() => setViewMode('soal')} className={`px-4 py-2 rounded ${viewMode === 'soal' ? 'bg-indigo-100 text-indigo-700' : 'text-gray-600'}`}>Bank Soal</button>
-          <button onClick={() => setShowLeaderboard(true)} className="px-4 py-2 rounded bg-yellow-100 text-yellow-700 font-bold flex items-center gap-2 hover:bg-yellow-200 transition"><Trophy size={16} /> Leaderboard</button>
-          {/* ✅ BARU: Tombol Violation Rules di Navbar */}
-          <button onClick={() => setShowViolationRules(true)} className="px-4 py-2 rounded bg-orange-100 text-orange-700 font-bold flex items-center gap-2 hover:bg-orange-200 transition"><Shield size={16} /> Aturan Ujian</button>
-          <button onClick={handleLogout} className="text-red-600 px-3"><LogOut size={18} /></button>
+        {/* Score Circle */}
+        <div className="flex justify-center -mt-8 relative z-10">
+          <div className="w-24 h-24 rounded-full bg-white shadow-xl border-4 border-white flex flex-col items-center justify-center">
+            <span className="text-2xl font-black text-gray-800">{result.pct}%</span>
+            <span className="text-[10px] text-gray-400 font-bold uppercase">Akurasi</span>
+          </div>
         </div>
-      </div>
 
-      <div className="max-w-7xl mx-auto p-4 flex-1 w-full">
-        {viewMode === 'tokens' ? (
-          // --- VIEW MODE: TOKENS ---
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="bg-white p-6 rounded-xl shadow h-fit">
-              <h2 className="font-bold mb-4 flex items-center gap-2"><Plus size={18} /> Buat Token</h2>
-              <div className="mb-4 bg-gray-50 p-3 rounded-lg border border-gray-200">
-                <p className="text-xs font-bold text-gray-500 mb-2 uppercase flex items-center gap-1"><Settings size={12} /> Metode Kirim Default:</p>
-                <div className="flex flex-col gap-2">
-                  {[
-                    { val: 'fonnte', icon: <Zap size={14}/>, label: '1. Auto (Fonnte API)', cls: 'green' },
-                    { val: 'manual_web', icon: <ExternalLink size={14}/>, label: '2. Manual (WA Web)', cls: 'blue' },
-                    { val: 'js_app', icon: <Smartphone size={14}/>, label: '3. JS Direct (App)', cls: 'purple' },
-                  ].map(({ val, icon, label, cls }) => (
-                    <label key={val} className={`cursor-pointer p-2 rounded text-xs font-bold flex items-center gap-2 border ${autoSendMode === val ? `bg-${cls}-100 border-${cls}-400 text-${cls}-700 ring-1 ring-${cls}-400` : 'bg-white border-gray-300 text-gray-500'}`}>
-                      <input type="radio" name="sendMode" value={val} checked={autoSendMode === val} onChange={() => setAutoSendMode(val)} className="hidden"/>
-                      {icon} {label}
-                    </label>
-                  ))}
-                </div>
+        <div className="p-6 space-y-5 pt-4">
+          {/* Stats */}
+          <div className="grid grid-cols-3 gap-3 text-center">
+            {[
+              { label: 'Benar', val: result.correct, color: 'text-emerald-600' },
+              { label: 'Salah', val: result.total - result.correct, color: 'text-red-500' },
+              { label: 'Skor IRT', val: result.irt, color: 'text-indigo-600' },
+            ].map(({ label, val, color }) => (
+              <div key={label} className="bg-gray-50 rounded-2xl p-3">
+                <div className={`text-2xl font-black ${color}`}>{val}</div>
+                <div className="text-gray-400 text-xs font-bold uppercase">{label}</div>
               </div>
-              <div className="space-y-4">
-                <input value={newTokenName} onChange={(e) => setNewTokenName(e.target.value)} className="w-full p-2 border rounded" placeholder="Nama Siswa"/>
-                <input value={newTokenSchool} onChange={(e) => setNewTokenSchool(e.target.value)} className="w-full p-2 border rounded" placeholder="Asal Sekolah"/>
-                <input value={newTokenPhone} onChange={(e) => setNewTokenPhone(e.target.value)} className="w-full p-2 border rounded" placeholder="No WhatsApp (08xxx)"/>
-                <button onClick={createToken} disabled={isSending} className={`w-full py-2 rounded transition text-white font-bold flex items-center justify-center gap-2 ${isSending ? 'bg-gray-400' : autoSendMode === 'fonnte' ? 'bg-green-600 hover:bg-green-700' : autoSendMode === 'js_app' ? 'bg-purple-600 hover:bg-purple-700' : 'bg-blue-600 hover:bg-blue-700'}`}>
-                  {isSending ? 'Mengirim...' : 'Generate & Kirim'}
-                </button>
-              </div>
-              <div className="relative flex py-2 items-center">
-                <div className="flex-grow border-t border-gray-200"></div>
-                <span className="flex-shrink-0 mx-4 text-gray-400 text-xs">ATAU IMPORT EXCEL</span>
-                <div className="flex-grow border-t border-gray-200"></div>
-              </div>
-              <div className="relative">
-                <input type="file" accept=".xlsx, .xls, .csv" onChange={handleImportExcel} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" disabled={isSending}/>
-                <button className="w-full py-2 rounded border-2 border-dashed border-indigo-300 text-indigo-600 font-bold hover:bg-indigo-50 flex items-center justify-center gap-2 transition"><UploadCloud size={18} /> Upload Data Siswa (.xlsx)</button>
-              </div>
-              <p className="text-[10px] text-gray-400 text-center">Format Kolom: Nama, Sekolah, HP</p>
-            </div>
-
-            <div className="md:col-span-2 space-y-4">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                {[
-                  { key: 'all', label: 'Total', count: tokenList.length, color: 'indigo' },
-                  { key: 'active', label: 'Aktif', count: activeTokens.length, color: 'green' },
-                  { key: 'used', label: 'Terpakai', count: usedTokens.length, color: 'gray' },
-                  { key: 'expired', label: 'Expired', count: expiredTokens.length, color: 'red' },
-                ].map(({ key, label, count, color }) => (
-                  <button key={key} onClick={() => setFilterStatus(key)} className={`p-3 rounded-lg border text-center transition ${filterStatus === key ? `bg-${color}-50 border-${color}-500 ring-2 ring-${color}-200` : 'bg-white border-gray-200 hover:bg-gray-50'}`}>
-                    <p className={`text-xs text-${color}-600 uppercase font-bold`}>{label}</p>
-                    <p className={`text-2xl font-bold text-${color}-700`}>{count}</p>
-                  </button>
-                ))}
-              </div>
-
-              <div className="bg-white p-6 rounded-xl shadow">
-                <div className="flex justify-between items-center mb-4">
-                  <h2 className="font-bold text-lg">List Token</h2>
-                  <div className="flex gap-2">
-                    <button onClick={handleDownloadExcel} className="flex items-center gap-1 text-green-700 bg-green-50 border border-green-200 px-3 py-1.5 rounded text-sm font-bold hover:bg-green-100 transition"><List size={14} /> Export Excel</button>
-                    <div className="flex items-center bg-gray-100 rounded-lg p-1 gap-1 border border-gray-200">
-                      <button onClick={() => fetchTokens('prev')} disabled={currentPage === 1} className="p-1.5 hover:bg-white rounded disabled:opacity-30 transition shadow-sm text-gray-600"><ChevronLeft size={16} /></button>
-                      <span className="text-xs font-bold px-2 text-gray-600 min-w-[30px] text-center">{currentPage}</span>
-                      <button onClick={() => fetchTokens('next')} disabled={!isNextAvailable} className="p-1.5 hover:bg-white rounded disabled:opacity-30 transition shadow-sm text-gray-600"><ChevronRight size={16} /></button>
-                    </div>
-                    <button onClick={() => fetchTokens('first')} className="text-indigo-600 hover:bg-indigo-50 p-2 rounded transition" title="Refresh"><RefreshCcw size={16} /></button>
-                    {tokenList.length > 0 && <button onClick={deleteAllTokens} className="text-red-600 bg-red-50 hover:bg-red-100 p-2 rounded transition ml-1"><Trash2 size={16} /></button>}
-                  </div>
-                </div>
-                <div className="overflow-x-auto max-h-[500px] overflow-y-auto">
-                  <table className="w-full text-sm text-left">
-                    <thead className="bg-gray-50 sticky top-0">
-                      <tr>
-                        <th className="p-2">Kode</th><th className="p-2">Nama & Sekolah</th><th className="p-2">Status Token</th>
-                        <th className="p-2">Status Kirim</th><th className="p-2 text-center">Progres & Skor</th>
-                        {/* ✅ BARU: Kolom Pelanggaran */}
-                        <th className="p-2 text-center">⚠️ Pnl</th>
-                        <th className="p-2 text-center">Kirim Ulang</th><th className="p-2 text-center">Aksi</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {getFilteredList().map((t) => {
-                        const expired = isExpired(t.createdAt);
-                        const statusLabel = expired ? 'EXPIRED' : t.status === 'used' ? 'USED' : 'ACTIVE';
-                        const statusColor = expired ? 'bg-red-100 text-red-700' : t.status === 'used' ? 'bg-gray-200 text-gray-700' : 'bg-green-100 text-green-700';
-                        const vScore = t.violationScore || 0;
-                        return (
-                          <tr key={t.tokenCode} className="border-b hover:bg-gray-50">
-                            <td className="p-2 font-mono text-indigo-600 font-bold">{t.tokenCode}</td>
-                            <td className="p-2">
-                              <div className="font-bold text-gray-800">{t.studentName}</div>
-                              <div className="text-xs text-gray-500 flex items-center gap-1"><School size={10} /> {t.studentSchool || '-'}</div>
-                              <div className="text-[10px] text-gray-400">{t.studentPhone}</div>
-                            </td>
-                            <td className="p-2"><span className={`px-2 py-1 rounded text-xs font-bold ${statusColor}`}>{statusLabel}</span></td>
-                            <td className="p-2">
-                              {t.isSent ? (
-                                <div className="flex flex-col"><span className="flex items-center gap-1 text-green-600 font-bold text-xs"><CheckCircle2 size={12} /> Terkirim</span><span className="text-[10px] text-gray-400">{t.sentMethod}</span></div>
-                              ) : (
-                                <span className="flex items-center gap-1 text-gray-400 text-xs"><XCircle size={12} /> Belum</span>
-                              )}
-                            </td>
-                            <td className="p-4 text-center">
-                              {t.score !== undefined && t.score !== null ? (
-                                <div className="flex flex-col gap-1 items-center">
-                                  <span className="bg-blue-100 text-blue-700 text-[10px] font-bold px-2 py-1 rounded w-fit border border-blue-200">SELESAI</span>
-                                  <span className="text-sm font-bold text-gray-800 flex items-center gap-1">🏆 Skor: {t.score}</span>
-                                </div>
-                              ) : (
-                                <span className="text-gray-400 text-xs font-bold bg-gray-100 px-2 py-1 rounded w-fit">-</span>
-                              )}
-                            </td>
-                            {/* ✅ BARU: Kolom violation score dengan color coding */}
-                            <td className="p-2 text-center">
-                              <span className={`text-xs font-bold px-2 py-1 rounded ${vScore === 0 ? 'text-gray-300' : vScore >= VIOLATION_SCORING.warningThreshold ? 'bg-red-100 text-red-600' : 'bg-yellow-100 text-yellow-600'}`}>
-                                {vScore}
-                              </span>
-                            </td>
-                            <td className="p-2 flex gap-1 justify-center">
-                              <button onClick={() => sendFonnteMessage(t.studentName, t.studentPhone, t.tokenCode)} className="bg-green-50 text-green-700 p-1.5 rounded hover:bg-green-100"><Zap size={14} /></button>
-                              <button onClick={() => sendManualWeb(t.studentName, t.studentPhone, t.tokenCode)} className="bg-blue-50 text-blue-700 p-1.5 rounded hover:bg-blue-100"><ExternalLink size={14} /></button>
-                              <button onClick={() => sendJsDirect(t.studentName, t.studentPhone, t.tokenCode)} className="bg-purple-50 text-purple-700 p-1.5 rounded hover:bg-purple-100"><Smartphone size={14} /></button>
-                            </td>
-                            <td className="p-2 text-center">
-                              <div className="flex gap-2 justify-center">
-                                {t.status === 'used' && !expired && <button onClick={() => resetScore(t.tokenCode)} className="text-orange-500 hover:text-orange-700 bg-orange-50 p-2 rounded border border-orange-200" title="Reset Ujian"><RefreshCcw size={16} /></button>}
-                                <button onClick={() => deleteToken(t.tokenCode)} className="text-red-500 hover:text-red-700 bg-red-50 p-2 rounded border border-red-200"><Trash2 size={16} /></button>
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
+            ))}
           </div>
-        ) : viewMode === 'users' ? (
-          // --- VIEW MODE: USERS ---
-          <div className="space-y-6">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="bg-white p-6 rounded-xl shadow border border-indigo-100">
-                <h3 className="text-gray-500 text-xs font-bold uppercase mb-1">Total Users</h3>
-                <div className="text-3xl font-black text-indigo-900">{totalUsersCount}</div>
-                <p className="text-xs text-gray-400 mt-1">Ditampilkan: {filteredUserList.length} user</p>
-              </div>
-              <div className="bg-white p-6 rounded-xl shadow border border-green-100">
-                <h3 className="text-gray-500 text-xs font-bold uppercase mb-1">Total Credits Beredar</h3>
-                <div className="text-3xl font-black text-green-600">{totalCreditsCount}</div>
-              </div>
-              <div className="bg-white p-6 rounded-xl shadow border border-blue-100">
-                <h3 className="text-gray-500 text-xs font-bold uppercase mb-1">Total Tokens</h3>
-                <div className="text-3xl font-black text-blue-600">{totalTokensCount}</div>
-              </div>
-            </div>
-            <div className="bg-white p-6 rounded-xl shadow">
-              <div className="flex flex-col md:flex-row justify-between items-center gap-4 mb-4">
-                <h2 className="font-bold text-lg text-gray-800 flex items-center gap-2"><Wallet size={20} /> Manajemen Saldo User</h2>
-                <div className="flex gap-2 w-full md:w-auto">
-                  <div className="relative w-full md:w-64">
-                    <input type="text" value={searchEmail} onChange={(e) => setSearchEmail(e.target.value)} placeholder="Cari Nama / Email / Sekolah..." className="pl-9 pr-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-200 outline-none w-full"/>
-                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                  </div>
-                  {searchEmail && <button onClick={() => setSearchEmail('')} className="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold hover:bg-gray-200 transition text-xs">Reset</button>}
-                  <button onClick={() => { setShowCreditModal(true); setSelectedUserIds([]); }} className="bg-green-100 text-green-700 px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-green-200 border border-green-200 flex items-center gap-1 transition whitespace-nowrap"><Coins size={14} /> Bulk Credits</button>
+
+          {/* Progress Bars */}
+          <div className="space-y-3">
+            {bars.map(({ label, val, max, color }) => (
+              <div key={label}>
+                <div className="flex justify-between text-xs font-bold text-gray-500 mb-1">
+                  <span>{label}</span><span>{val}/{max}</span>
+                </div>
+                <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
+                  <div className={`h-full ${color} rounded-full transition-all duration-700`} style={{ width: `${(val/max)*100}%` }}/>
                 </div>
               </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm text-left">
-                  <thead className="bg-gray-50">
-                    <tr><th className="p-3">Nama & Email</th><th className="p-3">Sekolah</th><th className="p-3">HP</th><th className="p-3 text-center">Sisa Credits</th><th className="p-3 text-center">Token</th><th className="p-3 text-center">Aksi</th></tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {filteredUserList.map((user) => (
-                      <tr key={user.id} className="hover:bg-gray-50 transition">
-                        <td className="p-3"><div className="font-bold text-gray-800">{user.displayName || 'No Name'}</div><div className="text-xs text-gray-500">{user.email}</div></td>
-                        <td className="p-3 text-gray-600">{user.school || '-'}</td>
-                        <td className="p-3 font-mono text-gray-500">{user.phone || '-'}</td>
-                        <td className="p-3 text-center"><span className={`px-3 py-1 rounded-full font-bold ${user.credits > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>{user.credits || 0}</span></td>
-                        <td className="p-3 text-center font-bold text-indigo-600">{user.generatedTokens ? user.generatedTokens.length : 0}</td>
-                        <td className="p-3 text-center">
-                          <div className="flex justify-center gap-2">
-                            <button onClick={() => handleAddCredits(user.id)} className="bg-green-50 text-green-600 p-2 rounded hover:bg-green-100 border border-green-200"><Coins size={16} /></button>
-                            <button onClick={() => handleDeleteUser(user.id)} className="bg-red-50 text-red-600 p-2 rounded hover:bg-red-100 border border-red-200"><Trash2 size={16} /></button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                    {filteredUserList.length === 0 && <tr><td colSpan="6" className="p-8 text-center text-gray-400">User tidak ditemukan.</td></tr>}
-                  </tbody>
-                </table>
-              </div>
-              {!searchEmail && (
-                <div className="flex justify-between items-center mt-4 border-t pt-4">
-                  <div className="text-xs text-gray-400">Menampilkan 20 user per halaman</div>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => fetchUsers('prev')} disabled={userCurrentPage === 1} className="p-2 hover:bg-gray-100 rounded disabled:opacity-50"><ChevronLeft size={16}/></button>
-                    <span className="text-xs font-bold">{userCurrentPage}</span>
-                    <button onClick={() => fetchUsers('next')} disabled={!userIsNextAvailable} className="p-2 hover:bg-gray-100 rounded disabled:opacity-50"><ChevronRight size={16}/></button>
-                  </div>
-                </div>
-              )}
-            </div>
+            ))}
           </div>
-        ) : (
-          // --- VIEW MODE: BANK SOAL ---
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-bold text-gray-800">Editor Bank Soal</h2>
-                <div className="flex gap-2">
-                  <button onClick={handleDownloadTemplateSoal} className="text-xs bg-green-50 text-green-700 px-3 py-2 rounded border border-green-200 font-bold flex items-center gap-1 hover:bg-green-100"><List size={14} /> Template Excel</button>
-                  <label className="text-xs bg-blue-50 text-blue-700 px-3 py-2 rounded border border-blue-200 font-bold flex items-center gap-1 hover:bg-blue-100 cursor-pointer">
-                    <UploadCloud size={14} /> Import Excel
-                    <input type="file" accept=".xlsx" className="hidden" onChange={handleImportSoalFile} />
-                  </label>
-                </div>
-              </div>
-              <div className="bg-gray-50 p-6 rounded-xl border border-gray-200 mb-8">
-                <select value={selectedSubtest} onChange={(e) => { setSelectedSubtest(e.target.value); resetForm(); }} className="w-full p-3 border rounded-lg mb-6 bg-white font-medium text-gray-700 shadow-sm focus:ring-2 focus:ring-indigo-200 outline-none">
-                  {SUBTESTS.map((s) => <option key={s.id} value={s.id}>{s.name} ({bankSoal[s.id]?.length || 0} / {s.questions})</option>)}
-                </select>
 
-                <div className="mb-6">
-                  <label className="text-xs font-bold text-gray-500 uppercase mb-2 block tracking-wider">Format Soal:</label>
-                  <div className="flex flex-wrap gap-2">
-                    {[
-                      { val: 'pilihan_ganda', icon: <List size={18}/>, label: 'Pilihan Ganda' },
-                      { val: 'pilihan_majemuk', icon: <CheckSquare size={18}/>, label: 'Pilihan Majemuk' },
-                      { val: 'isian', icon: <Type size={18}/>, label: 'Isian Singkat' },
-                    ].map(({ val, icon, label }) => (
-                      <label key={val} className={`cursor-pointer px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 border-2 transition ${questionType === val ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300'}`}>
-                        <input type="radio" name="qType" className="hidden" checked={questionType === val} onChange={() => handleTypeChange(val)}/>{icon} {label}
-                      </label>
-                    ))}
-                  </div>
-                </div>
+          {/* Badge */}
+          <div className="flex justify-center"><ScoreBadge pct={result.pct} /></div>
 
-                {/* ✅ BARU: Rich Text Toolbar untuk textarea pertanyaan */}
-                <div className="mb-4">
-                  <RichTextToolbar
-                    textareaRef={questionTextareaRef}
-                    value={questionText}
-                    onChange={setQuestionText}
-                  />
-                  <textarea
-                    ref={questionTextareaRef}
-                    value={questionText}
-                    onChange={(e) => setQuestionText(e.target.value)}
-                    className="w-full p-4 border border-gray-200 rounded-b-lg focus:ring-2 focus:ring-indigo-100 outline-none"
-                    rows="3"
-                    placeholder="Ketik Pertanyaan di sini (Support LaTeX dengan $...$, bold **teks**, italic _teks_)..."
-                  />
-                </div>
-
-                <div className="mb-6">
-                  <label className="text-xs font-bold text-gray-500 uppercase mb-2 block tracking-wider">Gambar Soal (Opsional):</label>
-                  {!questionImage ? (
-                    <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 flex flex-col items-center justify-center bg-white hover:bg-gray-50 transition cursor-pointer relative">
-                      <input type="file" accept="image/*" onChange={handleImageUpload} disabled={isUploading} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"/>
-                      {isUploading ? (
-                        <div className="flex flex-col items-center text-indigo-600 animate-pulse"><Loader2 size={32} className="animate-spin mb-2"/><span className="text-sm font-bold">Sedang Memproses...</span></div>
-                      ) : (
-                        <div className="flex flex-col items-center text-gray-400"><UploadCloud size={32} className="mb-2"/><span className="text-sm font-medium text-gray-500">Klik untuk Upload Gambar</span><span className="text-xs text-gray-400 mt-1">Max 1MB</span></div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="relative w-fit group">
-                      <img src={questionImage} alt="Preview Soal" className="max-h-48 rounded-lg border border-gray-200 shadow-sm"/>
-                      <button onClick={() => setQuestionImage('')} className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full shadow-md hover:bg-red-600 transition"><X size={16} /></button>
-                      <div className="mt-2 text-xs text-green-600 font-bold flex items-center gap-1"><CheckCircle2 size={12} /> Gambar Siap Disimpan</div>
-                    </div>
-                  )}
-                </div>
-
-                {questionType !== 'isian' ? (
-                  <>
-                    <div className="space-y-3 mb-6">
-                      {options.map((o, i) => {
-                        const ref = el => optionRefs.current[i] = el;
-                        const label = ['A','B','C','D','E'][i];
-                        return (
-                          <div key={i}>
-                            {/* ✅ BARU: Rich Text Toolbar per opsi */}
-                            <RichTextToolbar
-                              textareaRef={{ current: optionRefs.current[i] }}
-                              value={o}
-                              onChange={(newVal) => { const n = [...options]; n[i] = newVal; setOptions(n); }}
-                            />
-                            <div className="flex gap-3 items-center">
-                              <span className="w-10 h-10 flex-shrink-0 flex items-center justify-center bg-indigo-100 font-bold rounded-lg text-indigo-700">{label}</span>
-                              <input ref={ref} value={o} onChange={(e) => { const n = [...options]; n[i] = e.target.value; setOptions(n); }} className="w-full p-2.5 border rounded-b-lg focus:ring-2 focus:ring-indigo-100 outline-none" placeholder={`Pilihan Jawaban ${label}`}/>
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="mb-4">
-                      <label className="text-xs font-bold text-gray-500 uppercase mb-2 block tracking-wider">Kunci Jawaban Benar ({questionType === 'pilihan_ganda' ? 'Pilih Satu' : 'Pilih Banyak'}):</label>
-                      <div className="flex gap-3">
-                        {['A','B','C','D','E'].map((l) => {
-                          const isSelected = questionType === 'pilihan_ganda' ? correctAnswer === l : Array.isArray(correctAnswer) && correctAnswer.includes(l);
-                          return (
-                            <button key={l} onClick={() => {
-                              if (questionType === 'pilihan_ganda') setCorrectAnswer(l);
-                              else {
-                                let cur = Array.isArray(correctAnswer) ? [...correctAnswer] : [];
-                                setCorrectAnswer(cur.includes(l) ? cur.filter(x => x !== l) : [...cur, l]);
-                              }
-                            }} className={`flex-1 py-3 border-2 rounded-lg font-bold transition text-lg ${isSelected ? 'bg-green-50 text-white border-green-500 shadow-md' : 'bg-white text-gray-400 border-gray-200 hover:border-gray-400'}`}>{l}</button>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  </>
-                ) : (
-                  <div className="mb-6 bg-green-50 p-4 rounded-lg border border-green-200">
-                    <label className="text-xs font-bold text-green-700 uppercase mb-2 block tracking-wider flex items-center gap-1"><Key size={14} /> Kunci Jawaban (Teks/Angka):</label>
-                    <input value={correctAnswer} onChange={(e) => setCorrectAnswer(e.target.value)} className="w-full p-4 border-2 border-green-400 rounded-lg bg-white font-bold text-xl text-gray-800 focus:outline-none focus:ring-4 focus:ring-green-100" placeholder="Contoh: 25 atau Jakarta"/>
-                  </div>
-                )}
-
-                <div className="flex gap-3 pt-4 border-t border-gray-200">
-                  <button onClick={addOrUpdate} className="flex-1 bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 shadow-lg transition transform hover:-translate-y-0.5">
-                    {editingId ? 'Simpan Perubahan' : 'Tambah Soal Baru'}
-                  </button>
-                  {editingId && <button onClick={resetForm} className="px-6 border-2 border-gray-300 py-3 rounded-lg font-bold text-gray-500 hover:bg-gray-100">Batal Edit</button>}
-                </div>
-              </div>
-
-              <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2">
-                {(bankSoal[selectedSubtest] || []).map((q, i) => (
-                  <div key={q.id} className="p-4 border rounded-xl flex justify-between items-start bg-white hover:shadow-md transition group">
-                    <div className="flex-1 pr-4">
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded text-sm">#{i + 1}</span>
-                        <span className={`text-[10px] uppercase font-bold px-2 py-0.5 rounded border ${q.type === 'isian' ? 'bg-green-50 text-green-600 border-green-100' : q.type === 'pilihan_majemuk' ? 'bg-orange-50 text-orange-600 border-orange-100' : 'bg-gray-100 text-gray-500 border-gray-200'}`}>
-                          {q.type ? q.type.replace('_', ' ') : 'PILIHAN GANDA'}
-                        </span>
-                      </div>
-                      <p className="line-clamp-2 text-gray-700 text-sm font-medium">{q.question}</p>
-                      {q.image && <div className="mt-2 text-xs text-blue-500 flex items-center gap-1"><ImageIcon size={12} /> Ada Gambar</div>}
-                    </div>
-                    <div className="flex gap-2">
-                      <button onClick={() => loadSoalForEdit(q)} className="p-2 text-indigo-600 hover:bg-indigo-50 rounded"><Edit size={18} /></button>
-                      <button onClick={() => deleteSoal(q.id)} className="p-2 text-red-600 hover:bg-red-50 rounded"><Trash2 size={18} /></button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="lg:sticky lg:top-24 h-fit">
-              <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
-                <div className="bg-gray-50 px-4 py-3 border-b border-gray-100 flex justify-between items-center">
-                  <span className="font-bold text-gray-700 bg-white border border-gray-200 px-3 py-1 rounded text-sm flex items-center gap-2"><Eye size={16} className="text-indigo-500" /> Pratinjau Soal (Tampilan Siswa)</span>
-                  <span className="text-xs font-bold px-2 py-1 rounded border bg-indigo-50 text-indigo-600 border-indigo-100 uppercase">{questionType.replace('_', ' ')}</span>
-                </div>
-                <div className="p-5">
-                  <div className="text-gray-800 text-sm leading-relaxed font-medium mb-4 text-left text-justify whitespace-pre-wrap">
-                    <Latex>{(questionText || 'Belum ada pertanyaan...').replace(/</g, ' < ')}</Latex>
-                  </div>
-                  {questionImage && <img src={questionImage} className="w-full h-auto my-6 select-none object-contain" alt="Soal"/>}
-                  <div className="space-y-2 text-sm">
-                    {questionType === 'isian' ? (
-                      <div className="bg-gray-50 p-4 rounded-lg border-2 border-dashed border-gray-300 opacity-70">
-                        <input disabled className="w-full p-2 bg-transparent text-xl font-mono border-b-2 border-gray-300 outline-none" placeholder="Jawaban siswa..."/>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {options.map((opt, i) => {
-                          const label = ['A','B','C','D','E'][i];
-                          const isCorrect = questionType === 'pilihan_ganda' ? correctAnswer === label : Array.isArray(correctAnswer) && correctAnswer.includes(label);
-                          return (
-                            <div key={i} className={`p-3 rounded-lg border flex gap-3 items-center ${isCorrect ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200'}`}>
-                              <div className={`w-6 h-6 flex items-center justify-center font-bold rounded text-xs ${isCorrect ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-500'}`}>{label}</div>
-                              <div className="font-medium text-gray-700"><Latex>{(opt || `Pilihan ${label}`).replace(/</g, ' < ')}</Latex></div>
-                              {isCorrect && <CheckCircle2 size={16} className="text-green-500 ml-auto" />}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-              <div className="mt-4 text-center text-xs text-gray-400">*Preview ini menampilkan bagaimana soal terlihat di aplikasi siswa.</div>
-            </div>
+          {/* Buttons */}
+          <div className="space-y-2 pt-2">
+            <button
+              onClick={onRetry}
+              disabled={credits < CREDIT_COST}
+              className={`w-full py-3.5 rounded-2xl font-black text-white flex items-center justify-center gap-2 transition ${credits < CREDIT_COST ? 'bg-gray-300 cursor-not-allowed' : `bg-gradient-to-r ${g.bg} hover:opacity-90 shadow-lg active:scale-95`}`}
+            >
+              <RotateCcw size={18} /> Ulangi ({CREDIT_COST} kredit)
+            </button>
+            <button onClick={onBack} className="w-full py-3.5 rounded-2xl font-bold border-2 border-gray-200 text-gray-600 hover:bg-gray-50 flex items-center justify-center gap-2 transition">
+              <Home size={18} /> Kembali ke Dashboard
+            </button>
           </div>
-        )}
-      </div>
-
-      <div className="py-6 bg-white border-t border-gray-200 w-full text-center">
-        <p className="text-gray-400 text-xs font-mono flex items-center justify-center gap-1">
-          <Copyright size={12} /> {new Date().getFullYear()} Created by <span className="font-bold text-indigo-500">Liezira.Tech</span>
-        </p>
+        </div>
       </div>
     </div>
   );
 };
 
-export default UTBKAdminApp;
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+const UTBKPracticeApp = () => {
+  // Auth
+  const [user, setUser] = useState(null);
+  const [userData, setUserData] = useState(null);
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
+  const [loginEmail, setLoginEmail] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  // App
+  const [screen, setScreen] = useState('dashboard'); // dashboard | practice | result
+  const [bankSoal, setBankSoal] = useState({});
+  const [history, setHistory] = useState([]);
+  const [isLoadingBank, setIsLoadingBank] = useState(true);
+
+  // Practice Session
+  const [activeSubtest, setActiveSubtest] = useState(null);
+  const [pendingSubtest, setPendingSubtest] = useState(null); // for confirm modal
+  const [questions, setQuestions] = useState([]);
+  const [answers, setAnswers] = useState({});
+  const [currentQ, setCurrentQ] = useState(0);
+  const [timeLeft, setTimeLeft] = useState(0);
+  const [endTime, setEndTime] = useState(null);
+  const [practiceResult, setPracticeResult] = useState(null);
+
+  const timerRef = useRef(null);
+
+  // ── Auth listener ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, async (u) => {
+      setUser(u);
+      if (u) {
+        try {
+          const snap = await getDoc(doc(db, 'users', u.uid));
+          if (snap.exists()) setUserData(snap.data());
+        } catch {}
+      } else {
+        setUserData(null);
+      }
+      setIsCheckingAuth(false);
+    });
+    return unsub;
+  }, []);
+
+  // ── Realtime credits (refetch setelah transaksi) ──────────────────────────────
+  const refreshUserData = useCallback(async () => {
+    if (!user) return;
+    const snap = await getDoc(doc(db, 'users', user.uid));
+    if (snap.exists()) setUserData(snap.data());
+  }, [user]);
+
+  // ── Load bank soal ────────────────────────────────────────────────────────────
+  useEffect(() => {
+    const load = async () => {
+      setIsLoadingBank(true);
+      const loaded = {};
+      await Promise.all(SUBTESTS.map(async (s) => {
+        try {
+          const snap = await getDoc(doc(db, 'bank_soal', s.id));
+          loaded[s.id] = snap.exists() ? snap.data().questions : [];
+        } catch { loaded[s.id] = []; }
+      }));
+      setBankSoal(loaded);
+      setIsLoadingBank(false);
+    };
+    load();
+  }, []);
+
+  // ── Load history ──────────────────────────────────────────────────────────────
+  const loadHistory = useCallback(async () => {
+    if (!user) return;
+    try {
+      const q = query(
+        collection(db, 'practice_sessions'),
+        where('userId', '==', user.uid),
+        orderBy('createdAt', 'desc'),
+        limit(20)
+      );
+      const snap = await getDocs(q);
+      setHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch {}
+  }, [user]);
+
+  useEffect(() => { if (user) loadHistory(); }, [user, loadHistory]);
+
+  // ── Login ─────────────────────────────────────────────────────────────────────
+  const handleLogin = async (e) => {
+    e.preventDefault();
+    setLoginError('');
+    setIsLoggingIn(true);
+    try {
+      await signInWithEmailAndPassword(auth, loginEmail, loginPassword);
+    } catch (err) {
+      setLoginError('Email atau password salah. Coba lagi.');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+    setScreen('dashboard');
+    setActiveSubtest(null);
+    setAnswers({});
+  };
+
+  // ── Start Practice ────────────────────────────────────────────────────────────
+  const startPractice = useCallback(async (subtest) => {
+    if (!userData || (userData.credits || 0) < CREDIT_COST) return;
+    const bank = bankSoal[subtest.id] || [];
+    if (bank.length < subtest.questions) {
+      alert(`Soal ${subtest.name} belum cukup (ada ${bank.length}/${subtest.questions}).`);
+      return;
+    }
+
+    // Deduct credit
+    try {
+      await updateDoc(doc(db, 'users', user.uid), { credits: increment(-CREDIT_COST) });
+      await refreshUserData();
+    } catch {
+      alert('Gagal memotong kredit. Coba lagi.');
+      return;
+    }
+
+    // Shuffle & pick questions
+    const shuffled = [...bank].sort(() => Math.random() - 0.5).slice(0, subtest.questions);
+    setQuestions(shuffled);
+    setActiveSubtest(subtest);
+    setAnswers({});
+    setCurrentQ(0);
+    setPendingSubtest(null);
+
+    const dur = subtest.time * 60;
+    setEndTime(Date.now() + dur * 1000);
+    setTimeLeft(dur);
+    setScreen('practice');
+  }, [bankSoal, userData, user, refreshUserData]);
+
+  // ── Timer ─────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (screen !== 'practice' || !endTime) return;
+
+    timerRef.current = setInterval(() => {
+      const delta = Math.floor((endTime - Date.now()) / 1000);
+      if (delta <= 0) {
+        clearInterval(timerRef.current);
+        setTimeLeft(0);
+        finishPractice();
+      } else {
+        setTimeLeft(delta);
+      }
+    }, 1000);
+    return () => clearInterval(timerRef.current);
+  }, [screen, endTime]);
+
+  // ── Answer ────────────────────────────────────────────────────────────────────
+  const handleAnswer = useCallback((val, type) => {
+    const k = `${activeSubtest.id}_${currentQ}`;
+    setAnswers(prev => {
+      if (type === 'pilihan_majemuk') {
+        const cur = prev[k] || [];
+        return { ...prev, [k]: cur.includes(val) ? cur.filter(x => x !== val) : [...cur, val] };
+      }
+      return { ...prev, [k]: val };
+    });
+  }, [activeSubtest, currentQ]);
+
+  // ── Finish ────────────────────────────────────────────────────────────────────
+  const finishPractice = useCallback(async () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    const result = calcPracticeScore(answers, questions, activeSubtest.id);
+    setPracticeResult(result);
+
+    // Save to Firebase
+    try {
+      await addDoc(collection(db, 'practice_sessions'), {
+        userId: user.uid,
+        userName: userData?.displayName || user.email,
+        subtestId: activeSubtest.id,
+        subtestName: activeSubtest.name,
+        correct: result.correct,
+        total: result.total,
+        pct: result.pct,
+        irt: result.irt,
+        createdAt: new Date().toISOString(),
+      });
+      await loadHistory();
+    } catch {}
+
+    setScreen('result');
+  }, [answers, questions, activeSubtest, user, userData, loadHistory]);
+
+  // ── Loading / Auth Check ──────────────────────────────────────────────────────
+  if (isCheckingAuth) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <Loader2 size={40} className="animate-spin text-indigo-500" />
+          <p className="text-slate-500 font-semibold text-sm">Memuat...</p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── LOGIN SCREEN ──────────────────────────────────────────────────────────────
+  if (!user) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-4">
+        {/* Decorative blobs */}
+        <div className="absolute top-20 left-20 w-72 h-72 rounded-full bg-indigo-500/10 blur-3xl pointer-events-none" />
+        <div className="absolute bottom-20 right-20 w-96 h-96 rounded-full bg-purple-500/10 blur-3xl pointer-events-none" />
+
+        <div className="relative w-full max-w-sm">
+          {/* Logo */}
+          <div className="text-center mb-8">
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 mb-4">
+              <BookMarked size={32} className="text-indigo-300" />
+            </div>
+            <h1 className="text-3xl font-black text-white tracking-tight">Ruang Latihan</h1>
+            <p className="text-indigo-300 text-sm mt-1">Platform Belajar UTBK SNBT</p>
+          </div>
+
+          {/* Card */}
+          <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-8 shadow-2xl">
+            <h2 className="text-white font-bold text-lg mb-6">Masuk dengan Akun Siswa</h2>
+            <form onSubmit={handleLogin} className="space-y-4">
+              <div>
+                <label className="text-slate-400 text-xs font-bold uppercase tracking-wider block mb-1.5">Email</label>
+                <input
+                  type="email" required value={loginEmail} onChange={e => setLoginEmail(e.target.value)}
+                  className="w-full bg-white/10 border border-white/20 text-white placeholder-slate-500 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-400 transition"
+                  placeholder="email@kamu.com"
+                />
+              </div>
+              <div>
+                <label className="text-slate-400 text-xs font-bold uppercase tracking-wider block mb-1.5">Password</label>
+                <input
+                  type="password" required value={loginPassword} onChange={e => setLoginPassword(e.target.value)}
+                  className="w-full bg-white/10 border border-white/20 text-white placeholder-slate-500 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-indigo-400 transition"
+                  placeholder="••••••••"
+                />
+              </div>
+              {loginError && (
+                <div className="flex items-center gap-2 text-red-400 text-sm bg-red-500/10 border border-red-500/20 rounded-xl px-4 py-2.5">
+                  <AlertCircle size={16} /> {loginError}
+                </div>
+              )}
+              <button
+                type="submit" disabled={isLoggingIn}
+                className="w-full bg-indigo-500 hover:bg-indigo-400 disabled:bg-indigo-800 text-white font-black py-3.5 rounded-xl transition shadow-lg flex items-center justify-center gap-2 mt-2"
+              >
+                {isLoggingIn ? <Loader2 size={18} className="animate-spin" /> : <LogIn size={18} />}
+                {isLoggingIn ? 'Memproses...' : 'Masuk'}
+              </button>
+            </form>
+          </div>
+
+          <p className="text-center text-slate-500 text-xs mt-6">
+            <Copyright size={11} className="inline mr-1" />{new Date().getFullYear()} RuangSimulasi · Liezira.Tech
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  // ── RESULT SCREEN ─────────────────────────────────────────────────────────────
+  if (screen === 'result' && practiceResult && activeSubtest) {
+    return (
+      <ResultScreen
+        subtest={activeSubtest}
+        result={practiceResult}
+        credits={userData?.credits || 0}
+        onBack={() => { setScreen('dashboard'); setActiveSubtest(null); setPracticeResult(null); }}
+        onRetry={() => {
+          setPracticeResult(null);
+          setPendingSubtest(activeSubtest);
+          setScreen('dashboard');
+        }}
+      />
+    );
+  }
+
+  // ── PRACTICE SCREEN ───────────────────────────────────────────────────────────
+  if (screen === 'practice' && activeSubtest && questions.length > 0) {
+    const q = questions[currentQ];
+    const key = `${activeSubtest.id}_${currentQ}`;
+    const qType = q.type || 'pilihan_ganda';
+    const answered = answers[key];
+    const isAnswered = answered && (Array.isArray(answered) ? answered.length > 0 : true);
+    const answeredCount = questions.filter((_, i) => {
+      const k = `${activeSubtest.id}_${i}`;
+      const a = answers[k];
+      return a && (Array.isArray(a) ? a.length > 0 : true);
+    }).length;
+    const progress = (answeredCount / questions.length) * 100;
+    const isLow = timeLeft <= 60;
+    const g = GROUP_COLORS[activeSubtest.group];
+
+    return (
+      <div className="min-h-screen bg-slate-50 pb-10">
+        {/* ─ Header ─ */}
+        <div className={`sticky top-0 z-40 bg-gradient-to-r ${g.bg} text-white shadow-lg`}>
+          <div className="max-w-3xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-white/70 text-[10px] font-bold uppercase tracking-wider">{activeSubtest.group}</p>
+              <h2 className="font-black text-base leading-tight truncate">{activeSubtest.icon} {activeSubtest.name}</h2>
+            </div>
+
+            <div className={`flex items-center gap-2 px-4 py-2 rounded-xl font-mono font-black text-lg ${isLow ? 'bg-red-500 animate-pulse' : 'bg-white/20'}`}>
+              <Clock size={18} className={isLow ? 'text-white' : 'text-white/70'} />
+              {formatTime(timeLeft)}
+            </div>
+          </div>
+
+          {/* Progress bar */}
+          <div className="h-1 bg-white/20">
+            <div className="h-full bg-white/80 transition-all duration-500" style={{ width: `${progress}%` }} />
+          </div>
+
+          {/* Soal counter */}
+          <div className="max-w-3xl mx-auto px-4 py-2 flex items-center justify-between text-white/80 text-xs font-semibold">
+            <span>Soal {currentQ + 1} / {questions.length}</span>
+            <span>{answeredCount} dijawab</span>
+          </div>
+        </div>
+
+        <div className="max-w-3xl mx-auto px-4 pt-4 space-y-4">
+          {/* Question Card */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            {/* Question number + type pill */}
+            <div className="flex items-center gap-2 mb-4">
+              <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${g.bg} text-white flex items-center justify-center font-black text-sm`}>
+                {currentQ + 1}
+              </div>
+              <Pill className="bg-indigo-50 text-indigo-600 border border-indigo-100">
+                {qType === 'pilihan_majemuk' ? '☑ Pilihan Majemuk' : qType === 'isian' ? '✏️ Isian' : '○ Pilihan Ganda'}
+              </Pill>
+            </div>
+
+            <div className="text-gray-800 text-base leading-relaxed font-medium mb-4 whitespace-pre-wrap">
+              <Latex>{q.question}</Latex>
+            </div>
+
+            {q.image && (
+              <img src={q.image} alt="Gambar soal" className="w-full h-auto rounded-xl my-4 object-contain border border-gray-100" draggable="false" />
+            )}
+          </div>
+
+          {/* Answer Card */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
+            {qType === 'isian' ? (
+              <div>
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider block mb-3">Jawaban Kamu:</label>
+                <input
+                  type="text"
+                  value={answers[key] || ''}
+                  onChange={e => handleAnswer(e.target.value, 'isian')}
+                  className="w-full p-4 text-lg font-mono border-2 border-indigo-200 rounded-xl focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 outline-none transition"
+                  placeholder="Ketik jawaban..."
+                />
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {['A','B','C','D','E'].map((l, i) => {
+                  const opt = q.options?.[i];
+                  if (!opt) return null;
+                  const sel = qType === 'pilihan_majemuk'
+                    ? (answers[key] || []).includes(l)
+                    : answers[key] === l;
+                  return (
+                    <button
+                      key={l}
+                      onClick={() => handleAnswer(l, qType)}
+                      className={`w-full text-left p-4 rounded-xl border-2 flex items-center gap-3 transition active:scale-[0.98] ${sel ? 'border-indigo-500 bg-indigo-50 ring-2 ring-indigo-200' : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'}`}
+                    >
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm flex-shrink-0 transition ${sel ? `bg-gradient-to-br ${g.bg} text-white shadow` : 'bg-gray-100 text-gray-600'}`}>{l}</div>
+                      <span className="text-gray-700 font-medium flex-1"><Latex>{opt}</Latex></span>
+                      {sel && <CheckCircle2 size={18} className="text-indigo-500 flex-shrink-0" />}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Navigation */}
+          <div className="flex gap-3">
+            <button
+              onClick={() => setCurrentQ(p => p - 1)}
+              disabled={currentQ === 0}
+              className="px-5 py-3.5 bg-white border-2 border-gray-200 text-gray-600 rounded-xl font-bold disabled:opacity-40 hover:bg-gray-50 flex items-center gap-1.5 transition"
+            >
+              <ChevronLeft size={18} /> Kembali
+            </button>
+
+            {currentQ < questions.length - 1 ? (
+              <button
+                onClick={() => setCurrentQ(p => p + 1)}
+                className={`flex-1 py-3.5 rounded-xl font-black text-white flex items-center justify-center gap-2 transition shadow-md bg-gradient-to-r ${g.bg} hover:opacity-90 active:scale-[0.98]`}
+              >
+                Selanjutnya <ChevronRight size={18} />
+              </button>
+            ) : (
+              <button
+                onClick={() => {
+                  if (confirm(`Selesaikan latihan?\n\nTerjawab: ${answeredCount}/${questions.length} soal`)) finishPractice();
+                }}
+                className="flex-1 py-3.5 rounded-xl font-black text-white bg-emerald-500 hover:bg-emerald-600 flex items-center justify-center gap-2 transition shadow-md active:scale-[0.98]"
+              >
+                <CheckCircle2 size={18} /> Selesai
+              </button>
+            )}
+          </div>
+
+          {/* Mini nav grid */}
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+            <p className="text-xs font-bold text-gray-400 uppercase mb-3">Navigasi Cepat</p>
+            <div className="grid grid-cols-10 gap-1.5">
+              {questions.map((_, idx) => {
+                const k = `${activeSubtest.id}_${idx}`;
+                const a = answers[k];
+                const done = a && (Array.isArray(a) ? a.length > 0 : true);
+                return (
+                  <button
+                    key={idx}
+                    onClick={() => setCurrentQ(idx)}
+                    className={`h-8 rounded-lg text-[11px] font-bold transition ${idx === currentQ ? `bg-gradient-to-br ${g.bg} text-white shadow ring-2 ring-offset-1 ring-indigo-400` : done ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                  >
+                    {idx + 1}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── DASHBOARD ─────────────────────────────────────────────────────────────────
+  const credits = userData?.credits || 0;
+  const groups = [...new Set(SUBTESTS.map(s => s.group))];
+
+  // Best score per subtest dari history
+  const bestScores = {};
+  history.forEach(h => {
+    if (!bestScores[h.subtestId] || h.pct > bestScores[h.subtestId].pct) {
+      bestScores[h.subtestId] = h;
+    }
+  });
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      {/* Confirm Modal */}
+      {pendingSubtest && (
+        <ConfirmModal
+          subtest={pendingSubtest}
+          credits={credits}
+          onCancel={() => setPendingSubtest(null)}
+          onConfirm={() => startPractice(pendingSubtest)}
+        />
+      )}
+
+      {/* ─ Topbar ─ */}
+      <div className="sticky top-0 z-40 bg-white border-b border-gray-100 shadow-sm">
+        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center">
+              <BookMarked size={18} className="text-white" />
+            </div>
+            <div>
+              <h1 className="font-black text-gray-900 text-base leading-none">Ruang Latihan</h1>
+              <p className="text-gray-400 text-[11px] mt-0.5">UTBK SNBT</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <CreditBadge credits={credits} />
+            <button onClick={handleLogout} className="p-2 rounded-xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition" title="Logout">
+              <LogOut size={18} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-4xl mx-auto px-4 py-6 space-y-8">
+        {/* ─ Welcome Banner ─ */}
+        <div className="bg-gradient-to-br from-indigo-600 to-indigo-800 rounded-3xl p-6 text-white relative overflow-hidden shadow-xl">
+          <div className="absolute top-0 right-0 w-48 h-48 rounded-full bg-white/5 -translate-y-1/2 translate-x-1/4" />
+          <div className="absolute bottom-0 left-1/2 w-32 h-32 rounded-full bg-white/5 translate-y-1/2" />
+          <div className="relative z-10 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+            <div>
+              <p className="text-indigo-200 text-sm font-medium">Selamat datang,</p>
+              <h2 className="text-2xl font-black mt-0.5">{userData?.displayName || user.email}</h2>
+              <p className="text-indigo-200 text-sm mt-2 flex items-center gap-1.5">
+                <Target size={14} /> Pilih subtes, mulai latihan, raih skor terbaik!
+              </p>
+            </div>
+            <div className="bg-white/15 backdrop-blur-sm rounded-2xl p-4 text-center min-w-[100px] border border-white/20">
+              <div className="text-3xl font-black">{history.length}</div>
+              <div className="text-indigo-200 text-xs font-bold uppercase mt-0.5">Sesi Latihan</div>
+            </div>
+          </div>
+        </div>
+
+        {/* ─ Loading bank soal ─ */}
+        {isLoadingBank && (
+          <div className="flex items-center justify-center gap-3 py-8 text-gray-400">
+            <Loader2 size={20} className="animate-spin" />
+            <span className="text-sm font-medium">Memuat bank soal...</span>
+          </div>
+        )}
+
+        {/* ─ Subtest Cards by Group ─ */}
+        {!isLoadingBank && groups.map(group => {
+          const subtests = SUBTESTS.filter(s => s.group === group);
+          const gc = GROUP_COLORS[group];
+          return (
+            <div key={group}>
+              <div className="flex items-center gap-3 mb-4">
+                <div className={`h-1 w-8 rounded-full bg-gradient-to-r ${gc.bg}`} />
+                <h3 className="font-black text-gray-700 text-base uppercase tracking-wide">{group}</h3>
+                <div className={`h-px flex-1 bg-gradient-to-r ${gc.bg} opacity-20`} />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {subtests.map(s => {
+                  const best = bestScores[s.id];
+                  const bankReady = (bankSoal[s.id]?.length || 0) >= s.questions;
+                  const canStart = bankReady && credits >= CREDIT_COST;
+                  const sessionCount = history.filter(h => h.subtestId === s.id).length;
+
+                  return (
+                    <div
+                      key={s.id}
+                      className={`bg-white rounded-2xl border-2 shadow-sm overflow-hidden transition hover:shadow-md ${canStart ? 'border-gray-100 hover:border-indigo-200 cursor-pointer' : 'border-gray-100 opacity-80'}`}
+                      onClick={() => canStart && setPendingSubtest(s)}
+                    >
+                      {/* Card Top */}
+                      <div className={`bg-gradient-to-r ${gc.bg} p-5 flex items-center justify-between`}>
+                        <div>
+                          <div className="text-3xl mb-1">{s.icon}</div>
+                          <h4 className="text-white font-black text-sm leading-tight">{s.name}</h4>
+                          <p className="text-white/60 text-xs mt-0.5">{s.group}</p>
+                        </div>
+                        {best ? (
+                          <div className="text-center bg-white/15 rounded-xl p-3 border border-white/20">
+                            <div className="text-2xl font-black text-white">{best.pct}%</div>
+                            <div className="text-white/60 text-[10px] font-bold uppercase">Best</div>
+                          </div>
+                        ) : (
+                          <div className="text-center bg-white/10 rounded-xl p-3 border border-white/20">
+                            <div className="text-2xl font-black text-white/40">—</div>
+                            <div className="text-white/40 text-[10px] font-bold uppercase">Belum</div>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Card Bottom */}
+                      <div className="p-4 flex items-center justify-between gap-3">
+                        <div className="flex gap-3 text-xs text-gray-500">
+                          <span className="flex items-center gap-1"><BookOpen size={12} /> {s.questions} soal</span>
+                          <span className="flex items-center gap-1"><Clock size={12} /> {s.time} mnt</span>
+                          {sessionCount > 0 && (
+                            <span className="flex items-center gap-1"><RotateCcw size={12} /> {sessionCount}x</span>
+                          )}
+                        </div>
+
+                        {!bankReady ? (
+                          <Pill className="bg-gray-100 text-gray-400">Soal belum siap</Pill>
+                        ) : credits < CREDIT_COST ? (
+                          <Pill className="bg-red-50 text-red-400"><Lock size={10} /> Kredit kurang</Pill>
+                        ) : (
+                          <div className={`flex items-center gap-1.5 bg-gradient-to-r ${gc.bg} text-white text-xs font-black px-3 py-1.5 rounded-full shadow-sm`}>
+                            <PlayCircle size={13} /> Mulai · {CREDIT_COST}kr
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+
+        {/* ─ History ─ */}
+        {history.length > 0 && (
+          <div>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-slate-400 to-slate-600" />
+              <h3 className="font-black text-gray-700 text-base uppercase tracking-wide">Riwayat Latihan</h3>
+            </div>
+
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="divide-y divide-gray-50">
+                {history.slice(0, 10).map((h, i) => {
+                  const s = SUBTESTS.find(x => x.id === h.subtestId);
+                  const gc = s ? GROUP_COLORS[s.group] : GROUP_COLORS.TPS;
+                  return (
+                    <div key={h.id || i} className="px-5 py-4 flex items-center justify-between gap-4 hover:bg-slate-50 transition">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${gc.bg} flex items-center justify-center text-base flex-shrink-0`}>
+                          {s?.icon || '📝'}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-bold text-gray-800 text-sm truncate">{h.subtestName}</p>
+                          <p className="text-gray-400 text-xs flex items-center gap-1 mt-0.5">
+                            <Calendar size={11} />
+                            {new Date(h.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <div className="text-right">
+                          <p className="font-black text-gray-800 text-base">{h.pct}%</p>
+                          <p className="text-gray-400 text-xs">{h.correct}/{h.total} benar</p>
+                        </div>
+                        <ScoreBadge pct={h.pct} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Footer */}
+        <div className="text-center py-4">
+          <p className="text-gray-400 text-xs font-mono flex items-center justify-center gap-1">
+            <Copyright size={11} /> {new Date().getFullYear()} Created by <span className="font-bold text-indigo-500">Liezira.Tech</span>
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default UTBKPracticeApp;
