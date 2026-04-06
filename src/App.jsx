@@ -821,15 +821,20 @@ const UTBKPracticeApp = () => {
   const loadHistory = useCallback(async () => {
     if (!user) return;
     try {
+      // Tanpa orderBy agar tidak perlu composite index di Firestore
       const q = query(
         collection(db, 'practice_sessions'),
         where('userId', '==', user.uid),
-        orderBy('createdAt', 'desc'),
-        limit(50)
+        limit(100)
       );
       const snap = await getDocs(q);
-      setHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    } catch {}
+      const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      // Sort terbaru di atas (client-side)
+      data.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+      setHistory(data.slice(0, 50));
+    } catch (err) {
+      console.error('loadHistory error:', err);
+    }
   }, [user]);
 
   useEffect(() => { if (user) loadHistory(); }, [user, loadHistory]);
