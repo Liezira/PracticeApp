@@ -145,179 +145,249 @@ const ConfirmModal = ({ subtest, credits, onConfirm, onCancel }) => {
 };
 
 // ─── ANSWER REVIEW COMPONENT ──────────────────────────────────────────────────
-const AnswerReview = ({ questions, answers, subtestId, subtestGroup }) => {
+const LABELS = ['A', 'B', 'C', 'D', 'E'];
+
+const AnswerReview = ({ questions, answers, subtestId, subtestGroup, originalIndices }) => {
   const [revealedSet, setRevealedSet] = useState(new Set());
-  const [expandedIdx, setExpandedIdx] = useState(null);
   const g = GROUP_COLORS[subtestGroup] || GROUP_COLORS.TPS;
   const revealCount = revealedSet.size;
 
-  const handleReveal = (idx) => {
-    if (revealedSet.has(idx)) return;
-    if (revealCount >= MAX_REVEAL) return;
-    setRevealedSet(prev => new Set([...prev, idx]));
-  };
-
-  const toggleExpand = (idx) => {
-    setExpandedIdx(prev => prev === idx ? null : idx);
+  const handleReveal = (realIdx) => {
+    if (revealedSet.has(realIdx) || revealCount >= MAX_REVEAL) return;
+    setRevealedSet(prev => new Set([...prev, realIdx]));
   };
 
   return (
-    <div className="space-y-3">
-      {/* Info kuota reveal */}
-      <div className="flex items-center justify-between bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3">
+    <div className="space-y-4">
+
+      {/* ── Kuota Banner ── */}
+      <div className={`flex items-center justify-between rounded-2xl px-4 py-3 border ${
+        revealCount >= MAX_REVEAL
+          ? 'bg-amber-50 border-amber-200'
+          : 'bg-indigo-50 border-indigo-100'
+      }`}>
         <div className="flex items-center gap-2">
-          <Eye size={16} className="text-indigo-500" />
-          <span className="text-sm font-bold text-indigo-700">Preview Jawaban Benar</span>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs text-indigo-500 font-medium">Kuota tersisa:</span>
-          <span className={`font-black text-sm px-2.5 py-0.5 rounded-full ${revealCount >= MAX_REVEAL ? 'bg-red-100 text-red-600' : 'bg-indigo-100 text-indigo-700'}`}>
-            {MAX_REVEAL - revealCount}/{MAX_REVEAL}
+          {revealCount >= MAX_REVEAL
+            ? <Lock size={15} className="text-amber-500" />
+            : <Eye size={15} className="text-indigo-500" />
+          }
+          <span className={`text-sm font-bold ${revealCount >= MAX_REVEAL ? 'text-amber-700' : 'text-indigo-700'}`}>
+            {revealCount >= MAX_REVEAL
+              ? 'Kuota buka jawaban benar habis'
+              : 'Klik "Buka Jawaban Benar" untuk soal yang salah'
+            }
           </span>
+        </div>
+        <div className={`flex items-center gap-1.5 px-3 py-1 rounded-full font-black text-sm ${
+          revealCount >= MAX_REVEAL ? 'bg-amber-100 text-amber-700' : 'bg-indigo-100 text-indigo-700'
+        }`}>
+          <Eye size={12} />
+          {MAX_REVEAL - revealCount}/{MAX_REVEAL}
         </div>
       </div>
 
-      {revealCount >= MAX_REVEAL && (
-        <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-sm text-amber-700">
-          <Lock size={14} className="text-amber-500 flex-shrink-0" />
-          <span className="font-medium">Kuota buka jawaban sudah habis. Ulangi latihan untuk kuota baru.</span>
-        </div>
-      )}
-
+      {/* ── Question Cards ── */}
       {questions.map((q, idx) => {
-        const key = `${subtestId}_${idx}`;
+        const realIdx = originalIndices ? originalIndices[idx] : idx;
+        const key = `${subtestId}_${realIdx}`;
         const userAns = answers[key];
-        const correct = isAnswerCorrect(q, userAns);
-        const revealed = revealedSet.has(idx);
-        const isExpanded = expandedIdx === idx;
+        const isCorrect = isAnswerCorrect(q, userAns);
+        const revealed = revealedSet.has(realIdx);
         const qType = q.type || 'pilihan_ganda';
         const unanswered = !userAns || (Array.isArray(userAns) && userAns.length === 0);
 
+        // Warna border kartu
+        const cardBorder = unanswered ? 'border-gray-200'
+          : isCorrect ? 'border-emerald-200'
+          : 'border-red-200';
+
+        // Warna strip atas
+        const stripColor = unanswered ? 'bg-gray-100'
+          : isCorrect ? 'bg-emerald-500'
+          : 'bg-red-500';
+
         return (
-          <div
-            key={idx}
-            className={`bg-white rounded-2xl border-2 overflow-hidden transition-all ${
-              unanswered ? 'border-gray-200' :
-              correct ? 'border-emerald-200' : 'border-red-200'
-            }`}
-          >
-            {/* Row header */}
-            <div
-              className="flex items-center gap-3 p-4 cursor-pointer hover:bg-gray-50 transition"
-              onClick={() => toggleExpand(idx)}
-            >
-              {/* Nomor */}
-              <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm flex-shrink-0 ${
-                unanswered ? 'bg-gray-100 text-gray-400' :
-                correct ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'
-              }`}>
-                {idx + 1}
-              </div>
+          <div key={idx} className={`bg-white rounded-2xl border-2 overflow-hidden shadow-sm ${cardBorder}`}>
 
-              {/* Status icon */}
-              <div className="flex-shrink-0">
-                {unanswered ? (
-                  <AlertCircle size={18} className="text-gray-400" />
-                ) : correct ? (
-                  <CheckCircle2 size={18} className="text-emerald-500" />
-                ) : (
-                  <XCircle size={18} className="text-red-500" />
-                )}
+            {/* ── Strip header ── */}
+            <div className={`${stripColor} px-4 py-2.5 flex items-center justify-between`}>
+              <div className="flex items-center gap-2.5">
+                <div className="w-7 h-7 rounded-lg bg-white/25 flex items-center justify-center font-black text-white text-sm">
+                  {realIdx + 1}
+                </div>
+                <span className="text-white font-bold text-sm">
+                  {unanswered ? 'Tidak Dijawab'
+                    : isCorrect ? '✓ Benar'
+                    : '✗ Salah'}
+                </span>
+                <span className="text-white/60 text-xs">
+                  {qType === 'pilihan_majemuk' ? '· Pilihan Majemuk'
+                    : qType === 'isian' ? '· Isian'
+                    : '· Pilihan Ganda'}
+                </span>
               </div>
-
-              {/* Label */}
-              <div className="flex-1 min-w-0">
-                <p className={`text-sm font-bold ${
-                  unanswered ? 'text-gray-400' : correct ? 'text-emerald-700' : 'text-red-600'
-                }`}>
-                  {unanswered ? 'Tidak dijawab' : correct ? 'Benar' : 'Salah'}
-                </p>
-                {!unanswered && (
-                  <p className="text-xs text-gray-400 mt-0.5">
-                    Jawabanmu: <span className="font-bold text-gray-600">
-                      {Array.isArray(userAns) ? userAns.join(', ') : userAns}
-                    </span>
-                  </p>
-                )}
-              </div>
-
-              {/* Expand icon */}
-              <div className="text-gray-400 flex-shrink-0">
-                {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-              </div>
+              {!unanswered && !isCorrect && (
+                <span className="text-white/80 text-xs font-medium">
+                  Jawabanmu: <strong className="text-white">
+                    {Array.isArray(userAns) ? userAns.join(', ') : userAns}
+                  </strong>
+                </span>
+              )}
             </div>
 
-            {/* Expanded content */}
-            {isExpanded && (
-              <div className="px-4 pb-4 border-t border-gray-100 pt-3 space-y-3">
-                {/* Teks soal (truncated) */}
-                <div className="bg-gray-50 rounded-xl p-3">
-                  <p className="text-xs font-bold text-gray-400 uppercase mb-1">Soal</p>
-                  <div className="text-sm text-gray-700 line-clamp-3">
-                    <Latex>{q.question}</Latex>
-                  </div>
-                </div>
+            <div className="p-5 space-y-4">
 
-                {/* Jawaban user */}
-                {!unanswered && (
-                  <div className={`rounded-xl p-3 ${correct ? 'bg-emerald-50 border border-emerald-100' : 'bg-red-50 border border-red-100'}`}>
-                    <p className={`text-xs font-bold uppercase mb-1 ${correct ? 'text-emerald-500' : 'text-red-400'}`}>
-                      Jawaban Kamu
-                    </p>
-                    <p className={`text-sm font-bold ${correct ? 'text-emerald-700' : 'text-red-600'}`}>
-                      {Array.isArray(userAns) ? userAns.join(', ') : userAns}
-                      {qType !== 'isian' && q.options && !Array.isArray(userAns) && (
-                        <span className="font-normal text-gray-600 ml-2">
-                          — <Latex>{q.options[['A','B','C','D','E'].indexOf(userAns)] || ''}</Latex>
+              {/* ── Teks Soal ── */}
+              <div className="text-gray-800 text-[15px] leading-relaxed font-medium whitespace-pre-wrap">
+                <Latex>{q.question}</Latex>
+              </div>
+
+              {/* ── Gambar soal ── */}
+              {q.image && (
+                <img
+                  src={q.image}
+                  alt="Gambar soal"
+                  className="w-full h-auto rounded-xl object-contain border border-gray-100 max-h-56"
+                  draggable="false"
+                />
+              )}
+
+              {/* ── Opsi Pilihan Ganda / Majemuk ── */}
+              {(qType === 'pilihan_ganda' || qType === 'pilihan_majemuk') && q.options && (
+                <div className="space-y-2">
+                  {q.options.map((opt, i) => {
+                    if (!opt) return null;
+                    const label = LABELS[i];
+
+                    // Logika state setiap opsi
+                    const isUserPick = qType === 'pilihan_majemuk'
+                      ? (Array.isArray(userAns) && userAns.includes(label))
+                      : userAns === label;
+                    const isCorrectOpt = qType === 'pilihan_majemuk'
+                      ? (Array.isArray(q.correct) && q.correct.includes(label))
+                      : q.correct === label;
+
+                    // Styling opsi
+                    let optStyle, labelStyle, badgeIcon;
+
+                    if (isUserPick && isCorrectOpt) {
+                      // Dipilih & benar → hijau solid
+                      optStyle = 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-100';
+                      labelStyle = 'bg-emerald-500 text-white';
+                      badgeIcon = <CheckCircle2 size={17} className="text-emerald-500 flex-shrink-0" />;
+                    } else if (isUserPick && !isCorrectOpt) {
+                      // Dipilih & salah → merah solid
+                      optStyle = 'bg-red-50 border-red-400 ring-2 ring-red-100';
+                      labelStyle = 'bg-red-500 text-white';
+                      badgeIcon = <XCircle size={17} className="text-red-500 flex-shrink-0" />;
+                    } else if (!isUserPick && isCorrectOpt && revealed) {
+                      // Jawaban benar yang belum dipilih, sudah di-reveal → hijau outline
+                      optStyle = 'bg-emerald-50 border-emerald-300 border-dashed';
+                      labelStyle = 'bg-emerald-100 text-emerald-700 border border-emerald-300';
+                      badgeIcon = (
+                        <span className="text-[10px] font-black text-emerald-600 bg-emerald-100 border border-emerald-300 px-1.5 py-0.5 rounded-full flex-shrink-0 whitespace-nowrap">
+                          Jawaban Benar
                         </span>
-                      )}
-                    </p>
-                  </div>
-                )}
+                      );
+                    } else {
+                      // Opsi biasa
+                      optStyle = 'bg-gray-50 border-gray-200';
+                      labelStyle = 'bg-gray-200 text-gray-600';
+                      badgeIcon = null;
+                    }
 
-                {/* Tombol buka jawaban benar */}
-                {!correct && (
-                  <div>
-                    {revealed ? (
-                      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
-                        <p className="text-xs font-bold text-emerald-500 uppercase mb-1">Jawaban Benar</p>
-                        <p className="text-sm font-bold text-emerald-700">
-                          {Array.isArray(q.correct) ? q.correct.join(', ') : q.correct}
-                          {qType !== 'isian' && q.options && !Array.isArray(q.correct) && (
-                            <span className="font-normal text-gray-600 ml-2">
-                              — <Latex>{q.options[['A','B','C','D','E'].indexOf(q.correct)] || ''}</Latex>
-                            </span>
-                          )}
-                        </p>
-                        {q.explanation && (
-                          <div className="mt-2 pt-2 border-t border-emerald-100">
-                            <p className="text-xs text-emerald-600 font-medium">
-                              <Latex>{q.explanation}</Latex>
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); handleReveal(idx); }}
-                        disabled={revealCount >= MAX_REVEAL}
-                        className={`w-full py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition border-2 ${
-                          revealCount >= MAX_REVEAL
-                            ? 'border-gray-200 text-gray-400 cursor-not-allowed bg-gray-50'
-                            : 'border-indigo-200 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 active:scale-95'
-                        }`}
+                    return (
+                      <div
+                        key={label}
+                        className={`flex items-center gap-3 px-4 py-3 rounded-xl border-2 transition-all ${optStyle}`}
                       >
-                        {revealCount >= MAX_REVEAL ? (
-                          <><Lock size={14} /> Kuota habis</>
-                        ) : (
-                          <><Eye size={14} /> Buka Jawaban Benar ({MAX_REVEAL - revealCount} sisa)</>
-                        )}
-                      </button>
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm flex-shrink-0 ${labelStyle}`}>
+                          {label}
+                        </div>
+                        <span className={`flex-1 text-sm font-medium ${
+                          isUserPick && !isCorrectOpt ? 'text-red-700'
+                          : isUserPick && isCorrectOpt ? 'text-emerald-700'
+                          : !isUserPick && isCorrectOpt && revealed ? 'text-emerald-600'
+                          : 'text-gray-600'
+                        }`}>
+                          <Latex>{opt}</Latex>
+                        </span>
+                        {badgeIcon}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* ── Soal Isian ── */}
+              {qType === 'isian' && (
+                <div className="space-y-2">
+                  {/* Jawaban user */}
+                  <div className={`flex items-center gap-3 px-4 py-3 rounded-xl border-2 ${
+                    unanswered ? 'bg-gray-50 border-gray-200'
+                    : isCorrect ? 'bg-emerald-50 border-emerald-300'
+                    : 'bg-red-50 border-red-300'
+                  }`}>
+                    <span className={`text-xs font-black uppercase flex-shrink-0 ${
+                      unanswered ? 'text-gray-400' : isCorrect ? 'text-emerald-600' : 'text-red-500'
+                    }`}>Jawabanmu</span>
+                    <span className={`font-bold text-sm ${
+                      unanswered ? 'text-gray-400 italic' : isCorrect ? 'text-emerald-700' : 'text-red-700'
+                    }`}>
+                      {unanswered ? '(tidak dijawab)' : userAns}
+                    </span>
+                    {!unanswered && (isCorrect
+                      ? <CheckCircle2 size={16} className="text-emerald-500 ml-auto flex-shrink-0" />
+                      : <XCircle size={16} className="text-red-500 ml-auto flex-shrink-0" />
                     )}
                   </div>
-                )}
-              </div>
-            )}
+                  {/* Jawaban benar (isian) jika di-reveal */}
+                  {revealed && !isCorrect && (
+                    <div className="flex items-center gap-3 px-4 py-3 rounded-xl border-2 border-dashed bg-emerald-50 border-emerald-300">
+                      <span className="text-xs font-black uppercase text-emerald-600 flex-shrink-0">Jawaban Benar</span>
+                      <span className="font-bold text-sm text-emerald-700">{q.correct}</span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ── Pembahasan (jika sudah di-reveal) ── */}
+              {revealed && q.explanation && (
+                <div className="bg-sky-50 border border-sky-200 rounded-xl px-4 py-3">
+                  <p className="text-xs font-black text-sky-600 uppercase mb-1.5">💡 Pembahasan</p>
+                  <div className="text-sm text-sky-800 leading-relaxed">
+                    <Latex>{q.explanation}</Latex>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Tombol Buka Jawaban Benar ── */}
+              {!isCorrect && (
+                <button
+                  onClick={() => handleReveal(realIdx)}
+                  disabled={revealed || revealCount >= MAX_REVEAL}
+                  className={`w-full py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition border-2 ${
+                    revealed
+                      ? 'border-emerald-200 bg-emerald-50 text-emerald-600 cursor-default'
+                      : revealCount >= MAX_REVEAL
+                      ? 'border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed'
+                      : 'border-indigo-200 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 active:scale-[0.98]'
+                  }`}
+                >
+                  {revealed ? (
+                    <><CheckCircle2 size={15} /> Jawaban Benar Sudah Dibuka</>
+                  ) : revealCount >= MAX_REVEAL ? (
+                    <><Lock size={14} /> Kuota Habis (0/{MAX_REVEAL} tersisa)</>
+                  ) : (
+                    <><Eye size={14} /> Buka Jawaban Benar
+                      <span className="ml-1 bg-indigo-200 text-indigo-700 text-[10px] font-black px-1.5 py-0.5 rounded-full">
+                        {MAX_REVEAL - revealCount} sisa
+                      </span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
         );
       })}
@@ -329,10 +399,33 @@ const AnswerReview = ({ questions, answers, subtestId, subtestGroup }) => {
 const ResultScreen = ({ subtest, result, onBack, onRetry, credits, questions, answers }) => {
   const g = GROUP_COLORS[subtest.group];
   const [showReview, setShowReview] = useState(false);
+  const [reviewFilter, setReviewFilter] = useState('all'); // all | wrong | correct | unanswered
   const bars = [
     { label: 'Benar', val: result.correct, max: result.total, color: 'bg-emerald-500' },
     { label: 'Salah', val: result.total - result.correct, max: result.total, color: 'bg-red-400' },
   ];
+
+  // Hitung filter counts
+  const wrongCount = questions.filter((q, i) => {
+    const a = answers[`${subtest.id}_${i}`];
+    return a && (Array.isArray(a) ? a.length > 0 : true) && !isAnswerCorrect(q, a);
+  }).length;
+  const unansweredCount = questions.filter((_, i) => {
+    const a = answers[`${subtest.id}_${i}`];
+    return !a || (Array.isArray(a) && a.length === 0);
+  }).length;
+
+  // filteredWithIdx computed below
+  // Peta original index supaya key jawaban tetap benar
+  const filteredWithIdx = questions.reduce((acc, q, i) => {
+    if (reviewFilter === 'all') { acc.push({ q, i }); return acc; }
+    const a = answers[`${subtest.id}_${i}`];
+    const unanswered = !a || (Array.isArray(a) && a.length === 0);
+    if (reviewFilter === 'unanswered' && unanswered) acc.push({ q, i });
+    else if (reviewFilter === 'correct' && !unanswered && isAnswerCorrect(q, a)) acc.push({ q, i });
+    else if (reviewFilter === 'wrong' && !unanswered && !isAnswerCorrect(q, a)) acc.push({ q, i });
+    return acc;
+  }, []);
 
   return (
     <div className="min-h-screen bg-gray-50 pb-12">
@@ -422,16 +515,40 @@ const ResultScreen = ({ subtest, result, onBack, onRetry, credits, questions, an
 
         {/* Answer Review Section */}
         {showReview && questions && questions.length > 0 && (
-          <div className="w-full max-w-md mt-6 space-y-3">
-            <div className="flex items-center gap-3">
-              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-indigo-400 to-indigo-600" />
-              <h3 className="font-black text-gray-700 text-base uppercase tracking-wide">Review Jawaban</h3>
+          <div className="w-full max-w-2xl mt-6 space-y-4">
+            {/* Header + filter tabs */}
+            <div className="flex flex-col gap-3">
+              <div className="flex items-center gap-3">
+                <div className="h-1 w-8 rounded-full bg-gradient-to-r from-indigo-400 to-indigo-600" />
+                <h3 className="font-black text-gray-700 text-base uppercase tracking-wide">Review Jawaban</h3>
+              </div>
+              {/* Filter pills */}
+              <div className="flex gap-2 flex-wrap">
+                {[
+                  { key: 'all',        label: `Semua (${questions.length})`,       color: 'bg-gray-100 text-gray-700 border-gray-200', active: 'bg-indigo-600 text-white border-indigo-600' },
+                  { key: 'correct',    label: `✓ Benar (${result.correct})`,        color: 'bg-white text-emerald-700 border-emerald-200', active: 'bg-emerald-500 text-white border-emerald-500' },
+                  { key: 'wrong',      label: `✗ Salah (${wrongCount})`,            color: 'bg-white text-red-600 border-red-200',    active: 'bg-red-500 text-white border-red-500' },
+                  { key: 'unanswered', label: `— Kosong (${unansweredCount})`,      color: 'bg-white text-gray-500 border-gray-200',  active: 'bg-gray-600 text-white border-gray-600' },
+                ].map(tab => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setReviewFilter(tab.key)}
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-bold border-2 transition ${
+                      reviewFilter === tab.key ? tab.active : tab.color + ' hover:opacity-80'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
             </div>
+
             <AnswerReview
-              questions={questions}
+              questions={filteredWithIdx.map(x => x.q)}
               answers={answers}
               subtestId={subtest.id}
               subtestGroup={subtest.group}
+              originalIndices={filteredWithIdx.map(x => x.i)}
             />
           </div>
         )}
