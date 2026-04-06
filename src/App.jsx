@@ -558,7 +558,7 @@ const ResultScreen = ({ subtest, result, onBack, onRetry, credits, questions, an
 };
 
 // ─── HISTORY SCREEN ───────────────────────────────────────────────────────────
-const HistoryScreen = ({ history, onBack }) => {
+const HistoryScreen = ({ history, onBack, isLoading, firebaseError, onRetry }) => {
   const [filterSubtest, setFilterSubtest] = useState('all');
   const [sortBy, setSortBy] = useState('date'); // date | score
 
@@ -585,26 +585,85 @@ const HistoryScreen = ({ history, onBack }) => {
   const overallAvg = totalSessions > 0 ? Math.round(history.reduce((s, h) => s + h.pct, 0) / totalSessions) : 0;
   const bestOverall = totalSessions > 0 ? Math.max(...history.map(h => h.pct)) : 0;
 
+  // Parse kode error Firebase yang umum
+  const getFirebaseErrorHint = (err) => {
+    const code = err?.code || '';
+    if (code.includes('permission-denied'))
+      return { title: 'Akses Ditolak (permission-denied)', hint: 'Firestore Security Rules belum mengizinkan akses. Deploy file firestore.rules yang sudah disiapkan.' };
+    if (code.includes('app-check') || code.includes('UNAUTHORIZED'))
+      return { title: 'App Check Memblokir Request', hint: 'Domain Vercel kamu belum terdaftar di Firebase App Check, atau matikan App Check enforcement di Firebase Console.' };
+    if (code.includes('unavailable') || code.includes('network'))
+      return { title: 'Tidak Dapat Terhubung ke Firebase', hint: 'Periksa koneksi internet atau status Firebase.' };
+    if (code.includes('not-found'))
+      return { title: 'Collection Tidak Ditemukan', hint: 'Pastikan collection "practice_sessions" sudah ada di Firestore.' };
+    return { title: `Firebase Error: ${code || err?.message || 'Unknown'}`, hint: 'Lihat console browser untuk detail.' };
+  };
+
   return (
     <div className="min-h-screen bg-slate-50">
       {/* Header */}
       <div className="sticky top-0 z-40 bg-white border-b border-gray-100 shadow-sm">
         <div className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="p-2 rounded-xl text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition"
-          >
+          <button onClick={onBack} className="p-2 rounded-xl text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition">
             <ChevronLeft size={20} />
           </button>
           <div className="flex items-center gap-2">
             <History size={20} className="text-indigo-600" />
             <h1 className="font-black text-gray-900 text-base">Riwayat Skor</h1>
           </div>
+          {/* Reload button */}
+          <button
+            onClick={onRetry}
+            disabled={isLoading}
+            className="ml-auto p-2 rounded-xl text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition disabled:opacity-50"
+            title="Muat ulang"
+          >
+            <RotateCcw size={16} className={isLoading ? 'animate-spin' : ''} />
+          </button>
         </div>
       </div>
 
       <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
 
+        {/* ── Firebase Error Banner ── */}
+        {firebaseError && (() => {
+          const { title, hint } = getFirebaseErrorHint(firebaseError);
+          return (
+            <div className="bg-red-50 border-2 border-red-200 rounded-2xl p-5">
+              <div className="flex items-start gap-3">
+                <AlertCircle size={20} className="text-red-500 flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-black text-red-700 text-sm">{title}</p>
+                  <p className="text-red-600 text-xs mt-1 leading-relaxed">{hint}</p>
+                  <details className="mt-2">
+                    <summary className="text-xs text-red-400 cursor-pointer hover:text-red-600 font-medium">Detail error teknis</summary>
+                    <code className="text-[10px] text-red-500 block mt-1 bg-red-100 rounded p-2 overflow-auto whitespace-pre-wrap break-all">
+                      {firebaseError?.code && `Code: ${firebaseError.code}\n`}
+                      {firebaseError?.message}
+                    </code>
+                  </details>
+                </div>
+                <button
+                  onClick={onRetry}
+                  className="flex-shrink-0 text-xs font-bold bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1.5 rounded-lg transition"
+                >
+                  Coba Lagi
+                </button>
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* ── Loading State ── */}
+        {isLoading && (
+          <div className="flex items-center justify-center gap-3 py-8 text-gray-400">
+            <Loader2 size={20} className="animate-spin text-indigo-500" />
+            <span className="text-sm font-medium">Memuat riwayat...</span>
+          </div>
+        )}
+
+        {!isLoading && (
+        <>
         {/* Summary Cards */}
         <div className="grid grid-cols-3 gap-3">
           {[
@@ -739,6 +798,8 @@ const HistoryScreen = ({ history, onBack }) => {
             </div>
           )}
         </div>
+        </> // end !isLoading
+        )}
       </div>
     </div>
   );
@@ -760,6 +821,8 @@ const UTBKPracticeApp = () => {
   const [bankSoal, setBankSoal] = useState({});
   const [history, setHistory] = useState([]);
   const [isLoadingBank, setIsLoadingBank] = useState(true);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+  const [firebaseError, setFirebaseError] = useState(null); // error Firebase global
 
   // Practice Session
   const [activeSubtest, setActiveSubtest] = useState(null);
@@ -784,7 +847,10 @@ const UTBKPracticeApp = () => {
         try {
           const snap = await getDoc(doc(db, 'users', u.uid));
           if (snap.exists()) setUserData(snap.data());
-        } catch {}
+        } catch (err) {
+          console.error('[Firebase] getDoc users error:', err);
+          setFirebaseError(err);
+        }
       } else {
         setUserData(null);
       }
@@ -796,8 +862,12 @@ const UTBKPracticeApp = () => {
   // ── Realtime credits ──────────────────────────────────────────────────────────
   const refreshUserData = useCallback(async () => {
     if (!user) return;
-    const snap = await getDoc(doc(db, 'users', user.uid));
-    if (snap.exists()) setUserData(snap.data());
+    try {
+      const snap = await getDoc(doc(db, 'users', user.uid));
+      if (snap.exists()) setUserData(snap.data());
+    } catch (err) {
+      console.error('[Firebase] refreshUserData error:', err);
+    }
   }, [user]);
 
   // ── Load bank soal ────────────────────────────────────────────────────────────
@@ -809,7 +879,11 @@ const UTBKPracticeApp = () => {
         try {
           const snap = await getDoc(doc(db, 'bank_soal', s.id));
           loaded[s.id] = snap.exists() ? snap.data().questions : [];
-        } catch { loaded[s.id] = []; }
+        } catch (err) {
+          console.error(`[Firebase] bank_soal/${s.id} error:`, err);
+          if (!firebaseError) setFirebaseError(err);
+          loaded[s.id] = [];
+        }
       }));
       setBankSoal(loaded);
       setIsLoadingBank(false);
@@ -820,6 +894,7 @@ const UTBKPracticeApp = () => {
   // ── Load history ──────────────────────────────────────────────────────────────
   const loadHistory = useCallback(async () => {
     if (!user) return;
+    setIsLoadingHistory(true);
     try {
       // Tanpa orderBy agar tidak perlu composite index di Firestore
       const q = query(
@@ -832,8 +907,12 @@ const UTBKPracticeApp = () => {
       // Sort terbaru di atas (client-side)
       data.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
       setHistory(data.slice(0, 50));
+      setFirebaseError(null); // berhasil → hapus error
     } catch (err) {
-      console.error('loadHistory error:', err);
+      console.error('[Firebase] loadHistory error:', err);
+      setFirebaseError(err);
+    } finally {
+      setIsLoadingHistory(false);
     }
   }, [user]);
 
@@ -1025,6 +1104,9 @@ const UTBKPracticeApp = () => {
     return (
       <HistoryScreen
         history={history}
+        isLoading={isLoadingHistory}
+        firebaseError={firebaseError}
+        onRetry={loadHistory}
         onBack={() => setScreen('dashboard')}
       />
     );
@@ -1224,6 +1306,22 @@ const UTBKPracticeApp = () => {
           onCancel={() => setPendingSubtest(null)}
           onConfirm={() => startPractice(pendingSubtest)}
         />
+      )}
+
+      {/* ─ Firebase Error Banner ─ */}
+      {firebaseError && (
+        <div className="bg-red-600 text-white px-4 py-2.5 flex items-center gap-3 text-sm">
+          <AlertCircle size={16} className="flex-shrink-0" />
+          <span className="flex-1 font-medium">
+            <strong>Firebase Error:</strong> {firebaseError?.code || firebaseError?.message || 'Tidak dapat terhubung'}.
+            {firebaseError?.code === 'permission-denied' && ' → Deploy firestore.rules ke Firebase Console.'}
+            {(firebaseError?.code?.includes('app-check') || firebaseError?.message?.includes('App Check')) && ' → Matikan App Check enforcement di Firebase Console.'}
+          </span>
+          <button onClick={loadHistory} className="text-xs font-bold bg-white/20 hover:bg-white/30 px-2.5 py-1 rounded-lg transition flex-shrink-0">
+            Retry
+          </button>
+          <button onClick={() => setFirebaseError(null)} className="text-white/70 hover:text-white flex-shrink-0">✕</button>
+        </div>
       )}
 
       {/* ─ Topbar ─ */}
