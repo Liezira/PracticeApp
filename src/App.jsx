@@ -526,9 +526,9 @@ const ResultScreen = ({ subtest, result, onBack, onRetry, credits, questions, an
               <div className="flex gap-2 flex-wrap">
                 {[
                   { key: 'all',        label: `Semua (${questions.length})`,       color: 'bg-gray-100 text-gray-700 border-gray-200', active: 'bg-indigo-600 text-white border-indigo-600' },
-                  { key: 'correct',    label: `✓ Benar (${result.correct})`,        color: 'bg-white text-emerald-700 border-emerald-200', active: 'bg-emerald-500 text-white border-emerald-500' },
-                  { key: 'wrong',      label: `✗ Salah (${wrongCount})`,            color: 'bg-white text-red-600 border-red-200',    active: 'bg-red-500 text-white border-red-500' },
-                  { key: 'unanswered', label: `— Kosong (${unansweredCount})`,      color: 'bg-white text-gray-500 border-gray-200',  active: 'bg-gray-600 text-white border-gray-600' },
+                  { key: 'correct',    label: `✓ Benar (${result.correct})`,       color: 'bg-white text-emerald-700 border-emerald-200', active: 'bg-emerald-500 text-white border-emerald-500' },
+                  { key: 'wrong',      label: `✗ Salah (${wrongCount})`,           color: 'bg-white text-red-600 border-red-200',    active: 'bg-red-500 text-white border-red-500' },
+                  { key: 'unanswered', label: `— Kosong (${unansweredCount})`,     color: 'bg-white text-gray-500 border-gray-200',  active: 'bg-gray-600 text-white border-gray-600' },
                 ].map(tab => (
                   <button
                     key={tab.key}
@@ -557,10 +557,82 @@ const ResultScreen = ({ subtest, result, onBack, onRetry, credits, questions, an
   );
 };
 
+// ─── HISTORY REVIEW MODAL ─────────────────────────────────────────────────────
+const HistoryReviewModal = ({ session, onClose }) => {
+  const [reviewFilter, setReviewFilter] = useState('all');
+  const subtestInfo = SUBTESTS.find(s => s.id === session.subtestId);
+  const group = subtestInfo ? subtestInfo.group : 'TPS';
+
+  const questions = session.historyQuestions || [];
+  const answers = session.answers || {};
+
+  const wrongCount = questions.filter((q, i) => {
+    const a = answers[`${session.subtestId}_${i}`];
+    return a && (Array.isArray(a) ? a.length > 0 : true) && !isAnswerCorrect(q, a);
+  }).length;
+  const unansweredCount = questions.filter((_, i) => {
+    const a = answers[`${session.subtestId}_${i}`];
+    return !a || (Array.isArray(a) && a.length === 0);
+  }).length;
+
+  const filteredWithIdx = questions.reduce((acc, q, i) => {
+    if (reviewFilter === 'all') { acc.push({ q, i }); return acc; }
+    const a = answers[`${session.subtestId}_${i}`];
+    const unanswered = !a || (Array.isArray(a) && a.length === 0);
+    if (reviewFilter === 'unanswered' && unanswered) acc.push({ q, i });
+    else if (reviewFilter === 'correct' && !unanswered && isAnswerCorrect(q, a)) acc.push({ q, i });
+    else if (reviewFilter === 'wrong' && !unanswered && !isAnswerCorrect(q, a)) acc.push({ q, i });
+    return acc;
+  }, []);
+
+  return (
+    <div className="fixed inset-0 z-50 bg-slate-50 overflow-y-auto">
+      <div className="sticky top-0 z-40 bg-white border-b border-gray-100 shadow-sm px-4 py-3 flex items-center gap-3">
+        <button onClick={onClose} className="p-2 rounded-xl text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition">
+          <ChevronLeft size={20} />
+        </button>
+        <div>
+          <h2 className="font-black text-gray-900 text-base">Review Jawaban</h2>
+          <p className="text-gray-400 text-xs">{session.subtestName} • Skor: {session.pct}%</p>
+        </div>
+      </div>
+      <div className="max-w-2xl mx-auto px-4 py-6 space-y-4">
+         <div className="flex gap-2 flex-wrap mb-6">
+            {[
+              { key: 'all',        label: `Semua (${questions.length})`,       color: 'bg-gray-100 text-gray-700', active: 'bg-indigo-600 text-white' },
+              { key: 'correct',    label: `✓ Benar (${session.correct})`,      color: 'bg-white text-emerald-700 border border-emerald-200', active: 'bg-emerald-500 text-white' },
+              { key: 'wrong',      label: `✗ Salah (${wrongCount})`,           color: 'bg-white text-red-600 border border-red-200', active: 'bg-red-500 text-white' },
+              { key: 'unanswered', label: `— Kosong (${unansweredCount})`,     color: 'bg-white text-gray-500 border border-gray-200', active: 'bg-gray-600 text-white' },
+            ].map(tab => (
+              <button
+                key={tab.key}
+                onClick={() => setReviewFilter(tab.key)}
+                className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition ${
+                  reviewFilter === tab.key ? tab.active : tab.color + ' hover:opacity-80'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+        <AnswerReview
+          questions={filteredWithIdx.map(x => x.q)}
+          answers={answers}
+          subtestId={session.subtestId}
+          subtestGroup={group}
+          originalIndices={filteredWithIdx.map(x => x.i)}
+        />
+      </div>
+    </div>
+  );
+};
+
 // ─── HISTORY SCREEN ───────────────────────────────────────────────────────────
 const HistoryScreen = ({ history, onBack, isLoading, firebaseError, onRetry }) => {
   const [filterSubtest, setFilterSubtest] = useState('all');
   const [sortBy, setSortBy] = useState('date'); // date | score
+  const [selectedReview, setSelectedReview] = useState(null); // ✅ NEW STATE FOR MODAL
 
   const filtered = history
     .filter(h => filterSubtest === 'all' || h.subtestId === filterSubtest)
@@ -790,6 +862,18 @@ const HistoryScreen = ({ history, onBack, isLoading, firebaseError, onRetry }) =
                           <p className="text-gray-400 text-xs">{h.correct}/{h.total} benar</p>
                         </div>
                         <ScoreBadge pct={h.pct} />
+                        
+                        {/* ✅ TOMBOL REVIEW ADDED HERE */}
+                        {h.answers && h.historyQuestions && (
+                          <button
+                            onClick={() => setSelectedReview(h)}
+                            className="p-2 ml-1 bg-indigo-50 text-indigo-600 border border-indigo-100 rounded-xl hover:bg-indigo-100 transition"
+                            title="Lihat Review Jawaban"
+                          >
+                            <Eye size={16} />
+                          </button>
+                        )}
+                        
                       </div>
                     </div>
                   );
@@ -801,6 +885,14 @@ const HistoryScreen = ({ history, onBack, isLoading, firebaseError, onRetry }) =
         </> // end !isLoading
         )}
       </div>
+
+      {/* ✅ CALL MODAL REVIEW DISINI */}
+      {selectedReview && (
+        <HistoryReviewModal
+          session={selectedReview}
+          onClose={() => setSelectedReview(null)}
+        />
+      )}
     </div>
   );
 };
@@ -863,7 +955,7 @@ const UTBKPracticeApp = () => {
   const refreshUserData = useCallback(async () => {
     if (!user) return;
     try {
-      const snap = await getDoc(doc(db, 'users', user.uid));
+      const snap = await getDoc(doc(db, 'users', u.uid));
       if (snap.exists()) setUserData(snap.data());
     } catch (err) {
       console.error('[Firebase] refreshUserData error:', err);
@@ -1022,6 +1114,9 @@ const UTBKPracticeApp = () => {
         pct: result.pct,
         irt: result.irt,
         createdAt: new Date().toISOString(),
+        // ✅ NEW IMPLEMENTATION: Menyimpan soal dan jawaban ke Firestore
+        answers: answers,
+        historyQuestions: questions
       });
       await loadHistory();
     } catch {}
