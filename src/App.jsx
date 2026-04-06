@@ -3,7 +3,8 @@ import {
   BookOpen, Clock, Coins, Trophy, ChevronRight, ChevronLeft,
   LogIn, LogOut, User, Star, RotateCcw, CheckCircle2, XCircle,
   AlertCircle, Zap, BarChart2, Calendar, Lock, PlayCircle,
-  Copyright, Loader2, Home, BookMarked, Target
+  Copyright, Loader2, Home, BookMarked, Target, Eye, EyeOff,
+  History, TrendingUp, Award, ChevronDown, ChevronUp, Filter
 } from 'lucide-react';
 import { db, auth } from './firebase';
 import {
@@ -16,6 +17,7 @@ import Latex from 'react-latex-next';
 
 // ─── CONFIG ───────────────────────────────────────────────────────────────────
 const CREDIT_COST = 1;
+const MAX_REVEAL = 3; // max soal yang bisa dibuka jawaban benarnya
 
 const SUBTESTS = [
   { id: 'pu',  name: 'Penalaran Umum',                  questions: 30, time: 30,  icon: '🧠', group: 'TPS' },
@@ -52,6 +54,19 @@ const calcPracticeScore = (answers, questions, subtestId) => {
   const pct = total > 0 ? Math.round((correct / total) * 100) : 0;
   const irt = Math.round(200 + (pct / 100) * 800);
   return { correct, total, pct, irt };
+};
+
+// ─── HELPER: cek apakah jawaban benar ────────────────────────────────────────
+const isAnswerCorrect = (q, ans) => {
+  if (!ans) return false;
+  if (q.type === 'pilihan_majemuk') {
+    if (Array.isArray(ans) && Array.isArray(q.correct))
+      return [...ans].sort().join(',') === [...q.correct].sort().join(',');
+    return false;
+  } else if (q.type === 'isian') {
+    return ans.toString().toLowerCase().trim() === q.correct.toString().toLowerCase().trim();
+  }
+  return ans === q.correct;
 };
 
 // ─── SMALL COMPONENTS ─────────────────────────────────────────────────────────
@@ -129,81 +144,483 @@ const ConfirmModal = ({ subtest, credits, onConfirm, onCancel }) => {
   );
 };
 
+// ─── ANSWER REVIEW COMPONENT ──────────────────────────────────────────────────
+const AnswerReview = ({ questions, answers, subtestId, subtestGroup }) => {
+  const [revealedSet, setRevealedSet] = useState(new Set());
+  const [expandedIdx, setExpandedIdx] = useState(null);
+  const g = GROUP_COLORS[subtestGroup] || GROUP_COLORS.TPS;
+  const revealCount = revealedSet.size;
+
+  const handleReveal = (idx) => {
+    if (revealedSet.has(idx)) return;
+    if (revealCount >= MAX_REVEAL) return;
+    setRevealedSet(prev => new Set([...prev, idx]));
+  };
+
+  const toggleExpand = (idx) => {
+    setExpandedIdx(prev => prev === idx ? null : idx);
+  };
+
+  return (
+    <div className="space-y-3">
+      {/* Info kuota reveal */}
+      <div className="flex items-center justify-between bg-indigo-50 border border-indigo-100 rounded-2xl px-4 py-3">
+        <div className="flex items-center gap-2">
+          <Eye size={16} className="text-indigo-500" />
+          <span className="text-sm font-bold text-indigo-700">Preview Jawaban Benar</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-indigo-500 font-medium">Kuota tersisa:</span>
+          <span className={`font-black text-sm px-2.5 py-0.5 rounded-full ${revealCount >= MAX_REVEAL ? 'bg-red-100 text-red-600' : 'bg-indigo-100 text-indigo-700'}`}>
+            {MAX_REVEAL - revealCount}/{MAX_REVEAL}
+          </span>
+        </div>
+      </div>
+
+      {revealCount >= MAX_REVEAL && (
+        <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-sm text-amber-700">
+          <Lock size={14} className="text-amber-500 flex-shrink-0" />
+          <span className="font-medium">Kuota buka jawaban sudah habis. Ulangi latihan untuk kuota baru.</span>
+        </div>
+      )}
+
+      {questions.map((q, idx) => {
+        const key = `${subtestId}_${idx}`;
+        const userAns = answers[key];
+        const correct = isAnswerCorrect(q, userAns);
+        const revealed = revealedSet.has(idx);
+        const isExpanded = expandedIdx === idx;
+        const qType = q.type || 'pilihan_ganda';
+        const unanswered = !userAns || (Array.isArray(userAns) && userAns.length === 0);
+
+        return (
+          <div
+            key={idx}
+            className={`bg-white rounded-2xl border-2 overflow-hidden transition-all ${
+              unanswered ? 'border-gray-200' :
+              correct ? 'border-emerald-200' : 'border-red-200'
+            }`}
+          >
+            {/* Row header */}
+            <div
+              className="flex items-center gap-3 p-4 cursor-pointer hover:bg-gray-50 transition"
+              onClick={() => toggleExpand(idx)}
+            >
+              {/* Nomor */}
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm flex-shrink-0 ${
+                unanswered ? 'bg-gray-100 text-gray-400' :
+                correct ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'
+              }`}>
+                {idx + 1}
+              </div>
+
+              {/* Status icon */}
+              <div className="flex-shrink-0">
+                {unanswered ? (
+                  <AlertCircle size={18} className="text-gray-400" />
+                ) : correct ? (
+                  <CheckCircle2 size={18} className="text-emerald-500" />
+                ) : (
+                  <XCircle size={18} className="text-red-500" />
+                )}
+              </div>
+
+              {/* Label */}
+              <div className="flex-1 min-w-0">
+                <p className={`text-sm font-bold ${
+                  unanswered ? 'text-gray-400' : correct ? 'text-emerald-700' : 'text-red-600'
+                }`}>
+                  {unanswered ? 'Tidak dijawab' : correct ? 'Benar' : 'Salah'}
+                </p>
+                {!unanswered && (
+                  <p className="text-xs text-gray-400 mt-0.5">
+                    Jawabanmu: <span className="font-bold text-gray-600">
+                      {Array.isArray(userAns) ? userAns.join(', ') : userAns}
+                    </span>
+                  </p>
+                )}
+              </div>
+
+              {/* Expand icon */}
+              <div className="text-gray-400 flex-shrink-0">
+                {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+              </div>
+            </div>
+
+            {/* Expanded content */}
+            {isExpanded && (
+              <div className="px-4 pb-4 border-t border-gray-100 pt-3 space-y-3">
+                {/* Teks soal (truncated) */}
+                <div className="bg-gray-50 rounded-xl p-3">
+                  <p className="text-xs font-bold text-gray-400 uppercase mb-1">Soal</p>
+                  <div className="text-sm text-gray-700 line-clamp-3">
+                    <Latex>{q.question}</Latex>
+                  </div>
+                </div>
+
+                {/* Jawaban user */}
+                {!unanswered && (
+                  <div className={`rounded-xl p-3 ${correct ? 'bg-emerald-50 border border-emerald-100' : 'bg-red-50 border border-red-100'}`}>
+                    <p className={`text-xs font-bold uppercase mb-1 ${correct ? 'text-emerald-500' : 'text-red-400'}`}>
+                      Jawaban Kamu
+                    </p>
+                    <p className={`text-sm font-bold ${correct ? 'text-emerald-700' : 'text-red-600'}`}>
+                      {Array.isArray(userAns) ? userAns.join(', ') : userAns}
+                      {qType !== 'isian' && q.options && !Array.isArray(userAns) && (
+                        <span className="font-normal text-gray-600 ml-2">
+                          — <Latex>{q.options[['A','B','C','D','E'].indexOf(userAns)] || ''}</Latex>
+                        </span>
+                      )}
+                    </p>
+                  </div>
+                )}
+
+                {/* Tombol buka jawaban benar */}
+                {!correct && (
+                  <div>
+                    {revealed ? (
+                      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+                        <p className="text-xs font-bold text-emerald-500 uppercase mb-1">Jawaban Benar</p>
+                        <p className="text-sm font-bold text-emerald-700">
+                          {Array.isArray(q.correct) ? q.correct.join(', ') : q.correct}
+                          {qType !== 'isian' && q.options && !Array.isArray(q.correct) && (
+                            <span className="font-normal text-gray-600 ml-2">
+                              — <Latex>{q.options[['A','B','C','D','E'].indexOf(q.correct)] || ''}</Latex>
+                            </span>
+                          )}
+                        </p>
+                        {q.explanation && (
+                          <div className="mt-2 pt-2 border-t border-emerald-100">
+                            <p className="text-xs text-emerald-600 font-medium">
+                              <Latex>{q.explanation}</Latex>
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); handleReveal(idx); }}
+                        disabled={revealCount >= MAX_REVEAL}
+                        className={`w-full py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition border-2 ${
+                          revealCount >= MAX_REVEAL
+                            ? 'border-gray-200 text-gray-400 cursor-not-allowed bg-gray-50'
+                            : 'border-indigo-200 text-indigo-600 bg-indigo-50 hover:bg-indigo-100 active:scale-95'
+                        }`}
+                      >
+                        {revealCount >= MAX_REVEAL ? (
+                          <><Lock size={14} /> Kuota habis</>
+                        ) : (
+                          <><Eye size={14} /> Buka Jawaban Benar ({MAX_REVEAL - revealCount} sisa)</>
+                        )}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
 // ─── RESULT SCREEN ────────────────────────────────────────────────────────────
-const ResultScreen = ({ subtest, result, onBack, onRetry, credits }) => {
+const ResultScreen = ({ subtest, result, onBack, onRetry, credits, questions, answers }) => {
   const g = GROUP_COLORS[subtest.group];
+  const [showReview, setShowReview] = useState(false);
   const bars = [
     { label: 'Benar', val: result.correct, max: result.total, color: 'bg-emerald-500' },
     { label: 'Salah', val: result.total - result.correct, max: result.total, color: 'bg-red-400' },
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
-      <div className="bg-white rounded-3xl shadow-xl w-full max-w-md overflow-hidden">
-        {/* Header */}
-        <div className={`bg-gradient-to-br ${g.bg} p-8 text-white text-center relative overflow-hidden`}>
-          <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-white/10"></div>
-          <div className="absolute -bottom-6 -left-6 w-24 h-24 rounded-full bg-white/10"></div>
-          <div className="relative z-10">
-            <div className="text-5xl mb-3">{subtest.icon}</div>
-            <h2 className="text-xl font-black">{subtest.name}</h2>
-            <p className="text-white/70 text-sm mt-1">Sesi Latihan Selesai</p>
+    <div className="min-h-screen bg-gray-50 pb-12">
+      <div className="flex flex-col items-center pt-8 px-4">
+        <div className="bg-white rounded-3xl shadow-xl w-full max-w-md overflow-hidden">
+          {/* Header */}
+          <div className={`bg-gradient-to-br ${g.bg} p-8 text-white text-center relative overflow-hidden`}>
+            <div className="absolute -top-8 -right-8 w-32 h-32 rounded-full bg-white/10"></div>
+            <div className="absolute -bottom-6 -left-6 w-24 h-24 rounded-full bg-white/10"></div>
+            <div className="relative z-10">
+              <div className="text-5xl mb-3">{subtest.icon}</div>
+              <h2 className="text-xl font-black">{subtest.name}</h2>
+              <p className="text-white/70 text-sm mt-1">Sesi Latihan Selesai</p>
+            </div>
+          </div>
+
+          {/* Score Circle */}
+          <div className="flex justify-center -mt-8 relative z-10">
+            <div className="w-24 h-24 rounded-full bg-white shadow-xl border-4 border-white flex flex-col items-center justify-center">
+              <span className="text-2xl font-black text-gray-800">{result.pct}%</span>
+              <span className="text-[10px] text-gray-400 font-bold uppercase">Akurasi</span>
+            </div>
+          </div>
+
+          <div className="p-6 space-y-5 pt-4">
+            {/* Stats */}
+            <div className="grid grid-cols-3 gap-3 text-center">
+              {[
+                { label: 'Benar', val: result.correct, color: 'text-emerald-600' },
+                { label: 'Salah', val: result.total - result.correct, color: 'text-red-500' },
+                { label: 'Skor IRT', val: result.irt, color: 'text-indigo-600' },
+              ].map(({ label, val, color }) => (
+                <div key={label} className="bg-gray-50 rounded-2xl p-3">
+                  <div className={`text-2xl font-black ${color}`}>{val}</div>
+                  <div className="text-gray-400 text-xs font-bold uppercase">{label}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Progress Bars */}
+            <div className="space-y-3">
+              {bars.map(({ label, val, max, color }) => (
+                <div key={label}>
+                  <div className="flex justify-between text-xs font-bold text-gray-500 mb-1">
+                    <span>{label}</span><span>{val}/{max}</span>
+                  </div>
+                  <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
+                    <div className={`h-full ${color} rounded-full transition-all duration-700`} style={{ width: `${(val/max)*100}%` }}/>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Badge */}
+            <div className="flex justify-center"><ScoreBadge pct={result.pct} /></div>
+
+            {/* Toggle Review Button */}
+            {questions && questions.length > 0 && (
+              <button
+                onClick={() => setShowReview(p => !p)}
+                className={`w-full py-3 rounded-2xl font-bold border-2 flex items-center justify-center gap-2 transition ${
+                  showReview
+                    ? 'border-indigo-300 bg-indigo-50 text-indigo-700'
+                    : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                {showReview ? <EyeOff size={17} /> : <Eye size={17} />}
+                {showReview ? 'Tutup Review Jawaban' : 'Lihat Review Jawaban'}
+              </button>
+            )}
+
+            {/* Buttons */}
+            <div className="space-y-2 pt-1">
+              <button
+                onClick={onRetry}
+                disabled={credits < CREDIT_COST}
+                className={`w-full py-3.5 rounded-2xl font-black text-white flex items-center justify-center gap-2 transition ${credits < CREDIT_COST ? 'bg-gray-300 cursor-not-allowed' : `bg-gradient-to-r ${g.bg} hover:opacity-90 shadow-lg active:scale-95`}`}
+              >
+                <RotateCcw size={18} /> Ulangi ({CREDIT_COST} kredit)
+              </button>
+              <button onClick={onBack} className="w-full py-3.5 rounded-2xl font-bold border-2 border-gray-200 text-gray-600 hover:bg-gray-50 flex items-center justify-center gap-2 transition">
+                <Home size={18} /> Kembali ke Dashboard
+              </button>
+            </div>
           </div>
         </div>
 
-        {/* Score Circle */}
-        <div className="flex justify-center -mt-8 relative z-10">
-          <div className="w-24 h-24 rounded-full bg-white shadow-xl border-4 border-white flex flex-col items-center justify-center">
-            <span className="text-2xl font-black text-gray-800">{result.pct}%</span>
-            <span className="text-[10px] text-gray-400 font-bold uppercase">Akurasi</span>
+        {/* Answer Review Section */}
+        {showReview && questions && questions.length > 0 && (
+          <div className="w-full max-w-md mt-6 space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-indigo-400 to-indigo-600" />
+              <h3 className="font-black text-gray-700 text-base uppercase tracking-wide">Review Jawaban</h3>
+            </div>
+            <AnswerReview
+              questions={questions}
+              answers={answers}
+              subtestId={subtest.id}
+              subtestGroup={subtest.group}
+            />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── HISTORY SCREEN ───────────────────────────────────────────────────────────
+const HistoryScreen = ({ history, onBack }) => {
+  const [filterSubtest, setFilterSubtest] = useState('all');
+  const [sortBy, setSortBy] = useState('date'); // date | score
+
+  const filtered = history
+    .filter(h => filterSubtest === 'all' || h.subtestId === filterSubtest)
+    .sort((a, b) => {
+      if (sortBy === 'score') return b.pct - a.pct;
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+
+  // Stats per subtest
+  const bestScores = {};
+  const avgScores = {};
+  const countMap = {};
+  history.forEach(h => {
+    if (!bestScores[h.subtestId] || h.pct > bestScores[h.subtestId]) bestScores[h.subtestId] = h.pct;
+    if (!avgScores[h.subtestId]) { avgScores[h.subtestId] = 0; countMap[h.subtestId] = 0; }
+    avgScores[h.subtestId] += h.pct;
+    countMap[h.subtestId]++;
+  });
+  Object.keys(avgScores).forEach(k => { avgScores[k] = Math.round(avgScores[k] / countMap[k]); });
+
+  const totalSessions = history.length;
+  const overallAvg = totalSessions > 0 ? Math.round(history.reduce((s, h) => s + h.pct, 0) / totalSessions) : 0;
+  const bestOverall = totalSessions > 0 ? Math.max(...history.map(h => h.pct)) : 0;
+
+  return (
+    <div className="min-h-screen bg-slate-50">
+      {/* Header */}
+      <div className="sticky top-0 z-40 bg-white border-b border-gray-100 shadow-sm">
+        <div className="max-w-4xl mx-auto px-4 py-3 flex items-center gap-3">
+          <button
+            onClick={onBack}
+            className="p-2 rounded-xl text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition"
+          >
+            <ChevronLeft size={20} />
+          </button>
+          <div className="flex items-center gap-2">
+            <History size={20} className="text-indigo-600" />
+            <h1 className="font-black text-gray-900 text-base">Riwayat Skor</h1>
           </div>
         </div>
+      </div>
 
-        <div className="p-6 space-y-5 pt-4">
-          {/* Stats */}
-          <div className="grid grid-cols-3 gap-3 text-center">
-            {[
-              { label: 'Benar', val: result.correct, color: 'text-emerald-600' },
-              { label: 'Salah', val: result.total - result.correct, color: 'text-red-500' },
-              { label: 'Skor IRT', val: result.irt, color: 'text-indigo-600' },
-            ].map(({ label, val, color }) => (
-              <div key={label} className="bg-gray-50 rounded-2xl p-3">
-                <div className={`text-2xl font-black ${color}`}>{val}</div>
-                <div className="text-gray-400 text-xs font-bold uppercase">{label}</div>
-              </div>
-            ))}
+      <div className="max-w-4xl mx-auto px-4 py-6 space-y-6">
+
+        {/* Summary Cards */}
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: 'Total Sesi', val: totalSessions, icon: <BookOpen size={18} />, color: 'text-indigo-600', bg: 'bg-indigo-50' },
+            { label: 'Rata-rata', val: `${overallAvg}%`, icon: <TrendingUp size={18} />, color: 'text-blue-600', bg: 'bg-blue-50' },
+            { label: 'Skor Terbaik', val: `${bestOverall}%`, icon: <Award size={18} />, color: 'text-emerald-600', bg: 'bg-emerald-50' },
+          ].map(({ label, val, icon, color, bg }) => (
+            <div key={label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 text-center">
+              <div className={`inline-flex p-2 rounded-xl ${bg} ${color} mb-2`}>{icon}</div>
+              <div className={`text-xl font-black ${color}`}>{val}</div>
+              <div className="text-gray-400 text-[10px] font-bold uppercase mt-0.5">{label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Best per Subtest */}
+        {Object.keys(bestScores).length > 0 && (
+          <div>
+            <div className="flex items-center gap-3 mb-3">
+              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-indigo-400 to-purple-500" />
+              <h3 className="font-black text-gray-700 text-sm uppercase tracking-wide">Skor Terbaik per Subtes</h3>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {SUBTESTS.filter(s => bestScores[s.id] !== undefined).map(s => {
+                const gc = GROUP_COLORS[s.group];
+                const best = bestScores[s.id];
+                const avg = avgScores[s.id];
+                const count = countMap[s.id];
+                return (
+                  <div key={s.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                    <div className={`bg-gradient-to-r ${gc.bg} px-4 py-3 flex items-center justify-between`}>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xl">{s.icon}</span>
+                        <div>
+                          <p className="text-white font-black text-sm">{s.name}</p>
+                          <p className="text-white/60 text-[10px]">{count} sesi</p>
+                        </div>
+                      </div>
+                      <div className="text-center bg-white/15 rounded-xl px-3 py-1.5 border border-white/20">
+                        <div className="text-white font-black text-lg">{best}%</div>
+                        <div className="text-white/60 text-[9px] font-bold uppercase">Best</div>
+                      </div>
+                    </div>
+                    <div className="px-4 py-3">
+                      <div className="flex justify-between text-xs text-gray-500 mb-1.5">
+                        <span className="font-medium">Rata-rata: <strong className="text-gray-700">{avg}%</strong></span>
+                        <span className="font-medium">Terbaik: <strong className="text-emerald-600">{best}%</strong></span>
+                      </div>
+                      <div className="w-full bg-gray-100 rounded-full h-2 overflow-hidden">
+                        <div
+                          className={`h-full rounded-full bg-gradient-to-r ${gc.bg} transition-all duration-700`}
+                          style={{ width: `${best}%` }}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Filter & Sort */}
+        <div>
+          <div className="flex items-center gap-3 mb-3">
+            <div className="h-1 w-8 rounded-full bg-gradient-to-r from-slate-400 to-slate-600" />
+            <h3 className="font-black text-gray-700 text-sm uppercase tracking-wide">Semua Sesi</h3>
           </div>
 
-          {/* Progress Bars */}
-          <div className="space-y-3">
-            {bars.map(({ label, val, max, color }) => (
-              <div key={label}>
-                <div className="flex justify-between text-xs font-bold text-gray-500 mb-1">
-                  <span>{label}</span><span>{val}/{max}</span>
-                </div>
-                <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
-                  <div className={`h-full ${color} rounded-full transition-all duration-700`} style={{ width: `${(val/max)*100}%` }}/>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* Badge */}
-          <div className="flex justify-center"><ScoreBadge pct={result.pct} /></div>
-
-          {/* Buttons */}
-          <div className="space-y-2 pt-2">
-            <button
-              onClick={onRetry}
-              disabled={credits < CREDIT_COST}
-              className={`w-full py-3.5 rounded-2xl font-black text-white flex items-center justify-center gap-2 transition ${credits < CREDIT_COST ? 'bg-gray-300 cursor-not-allowed' : `bg-gradient-to-r ${g.bg} hover:opacity-90 shadow-lg active:scale-95`}`}
+          <div className="flex gap-2 mb-4 flex-wrap">
+            {/* Filter subtest */}
+            <select
+              value={filterSubtest}
+              onChange={e => setFilterSubtest(e.target.value)}
+              className="text-xs font-bold bg-white border-2 border-gray-200 rounded-xl px-3 py-2 text-gray-700 focus:outline-none focus:border-indigo-400 transition cursor-pointer"
             >
-              <RotateCcw size={18} /> Ulangi ({CREDIT_COST} kredit)
-            </button>
-            <button onClick={onBack} className="w-full py-3.5 rounded-2xl font-bold border-2 border-gray-200 text-gray-600 hover:bg-gray-50 flex items-center justify-center gap-2 transition">
-              <Home size={18} /> Kembali ke Dashboard
+              <option value="all">Semua Subtes</option>
+              {SUBTESTS.map(s => (
+                <option key={s.id} value={s.id}>{s.icon} {s.name}</option>
+              ))}
+            </select>
+
+            {/* Sort */}
+            <button
+              onClick={() => setSortBy(p => p === 'date' ? 'score' : 'date')}
+              className="flex items-center gap-1.5 text-xs font-bold bg-white border-2 border-gray-200 rounded-xl px-3 py-2 text-gray-700 hover:border-indigo-300 transition"
+            >
+              <Filter size={13} />
+              {sortBy === 'date' ? 'Urut: Terbaru' : 'Urut: Skor Tertinggi'}
             </button>
           </div>
+
+          {filtered.length === 0 ? (
+            <div className="text-center py-12 text-gray-400">
+              <History size={40} className="mx-auto mb-3 opacity-30" />
+              <p className="font-bold text-sm">Belum ada riwayat latihan</p>
+              <p className="text-xs mt-1">Mulai latihan untuk melihat riwayat di sini.</p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+              <div className="divide-y divide-gray-50">
+                {filtered.map((h, i) => {
+                  const s = SUBTESTS.find(x => x.id === h.subtestId);
+                  const gc = s ? GROUP_COLORS[s.group] : GROUP_COLORS.TPS;
+                  return (
+                    <div key={h.id || i} className="px-5 py-4 flex items-center justify-between gap-4 hover:bg-slate-50 transition">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${gc.bg} flex items-center justify-center text-lg flex-shrink-0`}>
+                          {s?.icon || '📝'}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-bold text-gray-800 text-sm truncate">{h.subtestName}</p>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <p className="text-gray-400 text-xs flex items-center gap-1">
+                              <Calendar size={10} />
+                              {new Date(h.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-3 flex-shrink-0">
+                        <div className="text-right">
+                          <p className="font-black text-gray-800 text-base">{h.pct}%</p>
+                          <p className="text-gray-400 text-xs">{h.correct}/{h.total} benar</p>
+                        </div>
+                        <ScoreBadge pct={h.pct} />
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -222,20 +639,23 @@ const UTBKPracticeApp = () => {
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   // App
-  const [screen, setScreen] = useState('dashboard'); // dashboard | practice | result
+  const [screen, setScreen] = useState('dashboard'); // dashboard | practice | result | history
   const [bankSoal, setBankSoal] = useState({});
   const [history, setHistory] = useState([]);
   const [isLoadingBank, setIsLoadingBank] = useState(true);
 
   // Practice Session
   const [activeSubtest, setActiveSubtest] = useState(null);
-  const [pendingSubtest, setPendingSubtest] = useState(null); // for confirm modal
+  const [pendingSubtest, setPendingSubtest] = useState(null);
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
   const [currentQ, setCurrentQ] = useState(0);
   const [timeLeft, setTimeLeft] = useState(0);
   const [endTime, setEndTime] = useState(null);
   const [practiceResult, setPracticeResult] = useState(null);
+  // Simpan snapshot jawaban & soal saat selesai untuk review
+  const [finishedQuestions, setFinishedQuestions] = useState([]);
+  const [finishedAnswers, setFinishedAnswers] = useState({});
 
   const timerRef = useRef(null);
 
@@ -256,7 +676,7 @@ const UTBKPracticeApp = () => {
     return unsub;
   }, []);
 
-  // ── Realtime credits (refetch setelah transaksi) ──────────────────────────────
+  // ── Realtime credits ──────────────────────────────────────────────────────────
   const refreshUserData = useCallback(async () => {
     if (!user) return;
     const snap = await getDoc(doc(db, 'users', user.uid));
@@ -288,7 +708,7 @@ const UTBKPracticeApp = () => {
         collection(db, 'practice_sessions'),
         where('userId', '==', user.uid),
         orderBy('createdAt', 'desc'),
-        limit(20)
+        limit(50)
       );
       const snap = await getDocs(q);
       setHistory(snap.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -327,7 +747,6 @@ const UTBKPracticeApp = () => {
       return;
     }
 
-    // Deduct credit
     try {
       await updateDoc(doc(db, 'users', user.uid), { credits: increment(-CREDIT_COST) });
       await refreshUserData();
@@ -336,13 +755,14 @@ const UTBKPracticeApp = () => {
       return;
     }
 
-    // Shuffle & pick questions
     const shuffled = [...bank].sort(() => Math.random() - 0.5).slice(0, subtest.questions);
     setQuestions(shuffled);
     setActiveSubtest(subtest);
     setAnswers({});
     setCurrentQ(0);
     setPendingSubtest(null);
+    setFinishedQuestions([]);
+    setFinishedAnswers({});
 
     const dur = subtest.time * 60;
     setEndTime(Date.now() + dur * 1000);
@@ -386,7 +806,10 @@ const UTBKPracticeApp = () => {
     const result = calcPracticeScore(answers, questions, activeSubtest.id);
     setPracticeResult(result);
 
-    // Save to Firebase
+    // Snapshot soal & jawaban untuk review
+    setFinishedQuestions([...questions]);
+    setFinishedAnswers({ ...answers });
+
     try {
       await addDoc(collection(db, 'practice_sessions'), {
         userId: user.uid,
@@ -421,12 +844,10 @@ const UTBKPracticeApp = () => {
   if (!user) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-4">
-        {/* Decorative blobs */}
         <div className="absolute top-20 left-20 w-72 h-72 rounded-full bg-indigo-500/10 blur-3xl pointer-events-none" />
         <div className="absolute bottom-20 right-20 w-96 h-96 rounded-full bg-purple-500/10 blur-3xl pointer-events-none" />
 
         <div className="relative w-full max-w-sm">
-          {/* Logo */}
           <div className="text-center mb-8">
             <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-indigo-500/20 border border-indigo-400/30 mb-4">
               <BookMarked size={32} className="text-indigo-300" />
@@ -435,7 +856,6 @@ const UTBKPracticeApp = () => {
             <p className="text-indigo-300 text-sm mt-1">Platform Belajar UTBK SNBT</p>
           </div>
 
-          {/* Card */}
           <div className="bg-white/5 backdrop-blur-xl border border-white/10 rounded-3xl p-8 shadow-2xl">
             <h2 className="text-white font-bold text-lg mb-6">Masuk dengan Akun Siswa</h2>
             <form onSubmit={handleLogin} className="space-y-4">
@@ -478,6 +898,16 @@ const UTBKPracticeApp = () => {
     );
   }
 
+  // ── HISTORY SCREEN ────────────────────────────────────────────────────────────
+  if (screen === 'history') {
+    return (
+      <HistoryScreen
+        history={history}
+        onBack={() => setScreen('dashboard')}
+      />
+    );
+  }
+
   // ── RESULT SCREEN ─────────────────────────────────────────────────────────────
   if (screen === 'result' && practiceResult && activeSubtest) {
     return (
@@ -485,6 +915,8 @@ const UTBKPracticeApp = () => {
         subtest={activeSubtest}
         result={practiceResult}
         credits={userData?.credits || 0}
+        questions={finishedQuestions}
+        answers={finishedAnswers}
         onBack={() => { setScreen('dashboard'); setActiveSubtest(null); setPracticeResult(null); }}
         onRetry={() => {
           setPracticeResult(null);
@@ -527,12 +959,10 @@ const UTBKPracticeApp = () => {
             </div>
           </div>
 
-          {/* Progress bar */}
           <div className="h-1 bg-white/20">
             <div className="h-full bg-white/80 transition-all duration-500" style={{ width: `${progress}%` }} />
           </div>
 
-          {/* Soal counter */}
           <div className="max-w-3xl mx-auto px-4 py-2 flex items-center justify-between text-white/80 text-xs font-semibold">
             <span>Soal {currentQ + 1} / {questions.length}</span>
             <span>{answeredCount} dijawab</span>
@@ -542,7 +972,6 @@ const UTBKPracticeApp = () => {
         <div className="max-w-3xl mx-auto px-4 pt-4 space-y-4">
           {/* Question Card */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-            {/* Question number + type pill */}
             <div className="flex items-center gap-2 mb-4">
               <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${g.bg} text-white flex items-center justify-center font-black text-sm`}>
                 {currentQ + 1}
@@ -656,7 +1085,6 @@ const UTBKPracticeApp = () => {
   const credits = userData?.credits || 0;
   const groups = [...new Set(SUBTESTS.map(s => s.group))];
 
-  // Best score per subtest dari history
   const bestScores = {};
   history.forEach(h => {
     if (!bestScores[h.subtestId] || h.pct > bestScores[h.subtestId].pct) {
@@ -688,8 +1116,16 @@ const UTBKPracticeApp = () => {
               <p className="text-gray-400 text-[11px] mt-0.5">UTBK SNBT</p>
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
             <CreditBadge credits={credits} />
+            {/* Tombol Riwayat Skor */}
+            <button
+              onClick={() => setScreen('history')}
+              className="p-2 rounded-xl text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition"
+              title="Riwayat Skor"
+            >
+              <History size={18} />
+            </button>
             <button onClick={handleLogout} className="p-2 rounded-xl text-gray-400 hover:text-red-500 hover:bg-red-50 transition" title="Logout">
               <LogOut size={18} />
             </button>
@@ -710,9 +1146,18 @@ const UTBKPracticeApp = () => {
                 <Target size={14} /> Pilih subtes, mulai latihan, raih skor terbaik!
               </p>
             </div>
-            <div className="bg-white/15 backdrop-blur-sm rounded-2xl p-4 text-center min-w-[100px] border border-white/20">
-              <div className="text-3xl font-black">{history.length}</div>
-              <div className="text-indigo-200 text-xs font-bold uppercase mt-0.5">Sesi Latihan</div>
+            <div className="flex gap-3">
+              <div className="bg-white/15 backdrop-blur-sm rounded-2xl p-4 text-center min-w-[90px] border border-white/20">
+                <div className="text-3xl font-black">{history.length}</div>
+                <div className="text-indigo-200 text-xs font-bold uppercase mt-0.5">Sesi</div>
+              </div>
+              <button
+                onClick={() => setScreen('history')}
+                className="bg-white/15 backdrop-blur-sm rounded-2xl p-4 text-center min-w-[90px] border border-white/20 hover:bg-white/25 transition cursor-pointer"
+              >
+                <History size={22} className="mx-auto text-white mb-1" />
+                <div className="text-indigo-200 text-xs font-bold uppercase">Riwayat</div>
+              </button>
             </div>
           </div>
         </div>
@@ -750,7 +1195,6 @@ const UTBKPracticeApp = () => {
                       className={`bg-white rounded-2xl border-2 shadow-sm overflow-hidden transition hover:shadow-md ${canStart ? 'border-gray-100 hover:border-indigo-200 cursor-pointer' : 'border-gray-100 opacity-80'}`}
                       onClick={() => canStart && setPendingSubtest(s)}
                     >
-                      {/* Card Top */}
                       <div className={`bg-gradient-to-r ${gc.bg} p-5 flex items-center justify-between`}>
                         <div>
                           <div className="text-3xl mb-1">{s.icon}</div>
@@ -770,7 +1214,6 @@ const UTBKPracticeApp = () => {
                         )}
                       </div>
 
-                      {/* Card Bottom */}
                       <div className="p-4 flex items-center justify-between gap-3">
                         <div className="flex gap-3 text-xs text-gray-500">
                           <span className="flex items-center gap-1"><BookOpen size={12} /> {s.questions} soal</span>
@@ -798,17 +1241,25 @@ const UTBKPracticeApp = () => {
           );
         })}
 
-        {/* ─ History ─ */}
+        {/* ─ History Preview (top 5) ─ */}
         {history.length > 0 && (
           <div>
-            <div className="flex items-center gap-3 mb-4">
-              <div className="h-1 w-8 rounded-full bg-gradient-to-r from-slate-400 to-slate-600" />
-              <h3 className="font-black text-gray-700 text-base uppercase tracking-wide">Riwayat Latihan</h3>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <div className="h-1 w-8 rounded-full bg-gradient-to-r from-slate-400 to-slate-600" />
+                <h3 className="font-black text-gray-700 text-base uppercase tracking-wide">Riwayat Terbaru</h3>
+              </div>
+              <button
+                onClick={() => setScreen('history')}
+                className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 hover:text-indigo-800 transition"
+              >
+                Lihat Semua <ChevronRight size={14} />
+              </button>
             </div>
 
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
               <div className="divide-y divide-gray-50">
-                {history.slice(0, 10).map((h, i) => {
+                {history.slice(0, 5).map((h, i) => {
                   const s = SUBTESTS.find(x => x.id === h.subtestId);
                   const gc = s ? GROUP_COLORS[s.group] : GROUP_COLORS.TPS;
                   return (
@@ -836,6 +1287,16 @@ const UTBKPracticeApp = () => {
                   );
                 })}
               </div>
+              {history.length > 5 && (
+                <div className="px-5 py-3 border-t border-gray-50">
+                  <button
+                    onClick={() => setScreen('history')}
+                    className="w-full text-center text-xs font-bold text-indigo-500 hover:text-indigo-700 transition flex items-center justify-center gap-1"
+                  >
+                    Lihat {history.length - 5} sesi lainnya <ChevronRight size={13} />
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         )}
